@@ -7,6 +7,7 @@ C2PA content credentials -> optional ML detector -> verdict.
 import logging
 import math
 import os
+import contextvars
 from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
@@ -140,6 +141,21 @@ _PARSER_LIMITS = {
     "image_pixels": exif.MAX_PIXELS,
     "video_pixels": video.MAX_PIXELS,
 }
+_MODEL_PREDICT_ORIGINAL = model.predict
+_DEADLINE_CONTEXT: contextvars.ContextVar[float | None] = contextvars.ContextVar("scan_deadline", default=None)
+_CANCELLATION_CONTEXT: contextvars.ContextVar[isolate.CancellationToken | None] = contextvars.ContextVar(
+    "scan_cancellation", default=None
+)
+
+
+def _set_request_context(deadline: float, cancellation: isolate.CancellationToken):
+    return _DEADLINE_CONTEXT.set(deadline), _CANCELLATION_CONTEXT.set(cancellation)
+
+
+def _reset_request_context(tokens) -> None:
+    deadline_token, cancellation_token = tokens
+    _DEADLINE_CONTEXT.reset(deadline_token)
+    _CANCELLATION_CONTEXT.reset(cancellation_token)
 
 
 def _parser_instrumented() -> bool:
@@ -295,19 +311,35 @@ def _hits(records: list[dict]) -> list[Hit]:
     return [Hit(**record) for record in records]
 
 
-def _images(records: list[dict]) -> list[Image.Image]:
-    return [Image.frombytes("RGB", (record["width"], record["height"]), record["data"]) for record in records]
+def _images(records: list[dict], deadline: float) -> list[Image.Image]:
+    images = []
+    for record in records:
+        isolate.check_deadline(deadline)
+        images.append(Image.frombytes("RGB", (record["width"], record["height"]), record["data"]))
+    isolate.check_deadline(deadline)
+    return images
 
 
-def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
-    """Scan the media file at `path`. `content_type` is the server-sniffed MIME type."""
+def scan_file(
+    path: str | Path,
+    filename: str,
+    content_type: str,
+    deadline: float | None = None,
+    cancellation: isolate.CancellationToken | None = None,
+) -> ScanReport:
+    """Scan media within one absolute deadline. `content_type` is server-sniffed."""
+    deadline = deadline if deadline is not None else _DEADLINE_CONTEXT.get()
+    deadline = deadline if deadline is not None else isolate.deadline_after_timeout()
+    cancellation = cancellation or _CANCELLATION_CONTEXT.get() or isolate.CancellationToken()
+    isolate.check_deadline(deadline)
     want_frames = model.enabled()
     try:
-        parsed = (
-            isolate.parse(path, filename, content_type, want_frames)
-            if isolate.enabled() and not _parser_instrumented()
-            else _parse_hostile(path, content_type, want_frames)
-        )
+        if isolate.enabled() and not _parser_instrumented():
+            parsed = isolate.parse(path, filename, content_type, want_frames,
+                                   deadline=deadline, cancellation=cancellation)
+        else:
+            parsed = _parse_hostile(path, content_type, want_frames)
+            isolate.check_deadline(deadline)
     except isolate.WorkerUnsupportedMedia as exc:
         raise UnsupportedMedia(str(exc)) from exc
 
@@ -329,7 +361,7 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
     raw_hits = _hits(parsed["raw_hits"])
     text_hits = _hits(parsed["text_hits"])
     chunk_hits = _hits(parsed["chunk_hits"])
-    frames = _images(parsed["frames"])
+    frames = _images(parsed["frames"], deadline)
     timestamps = parsed["timestamps"]
     duration = parsed["duration"]
     camera = parsed["camera"]
@@ -357,7 +389,9 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
 
     if low_colour:
         out.add("info", "The AI detector is unreliable on black-and-white or low-colour images.", 0.1)
-    model_info, model_failure = _run_model(out, frames, kind, timestamps, duration, low_colour)
+    model_info, model_failure = _run_model(
+        out, frames, kind, timestamps, duration, low_colour, deadline=deadline
+    )
     if cred is not None and cred.valid and cred.trusted and model_info is not None:
         decision = model_info["decision"]
         if cred.capture and decision == "likely":
@@ -431,18 +465,25 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
 
 def _run_model(
     out: _Collector, frames: list, kind: str, timestamps: list[float] | None = None,
-    duration: float | None = None, low_colour: bool = False,
+    duration: float | None = None, low_colour: bool = False, deadline: float | None = None,
 ) -> tuple[ModelInfo | None, str | None]:
     """Run the detectors. Returns (info, None), or (None, reason) when they ran but gave no result."""
     if not frames:
         return None, None
+    if deadline is None:
+        deadline = isolate.deadline_after_timeout()
+    if isolate.remaining(deadline) < isolate.infer_reserve_s():
+        return None, "time budget exhausted before detector inference"
     try:
-        pred = model.predict(frames)
+        pred = _predict_in_batches(frames, deadline)
     except Exception:
         log.exception("model inference failed")
         return None, "the detector failed on this file"
     if pred is None:
         return None, "the detector is not available on this server"
+    frames = frames[:len(pred)]
+    if timestamps is not None:
+        timestamps = timestamps[:len(pred)]
     if not all(math.isfinite(x) for _, probs in pred.models() for x in probs):
         log.warning("detector returned a non-finite score")
         return None, "the detector returned an invalid score"
@@ -531,6 +572,45 @@ def _run_model(
     if kind == "video" and duration is None:
         out.add("info", "The video duration is unknown, so detector coverage may be partial.", 0.2)
     return info, None
+
+
+def _predict_in_batches(frames: list, deadline: float) -> model.Prediction | None:
+    """Score small batches and stop between calls when the wall deadline is exhausted."""
+    # Instrumented predictors used by tests/embedders often return position-specific vectors for the
+    # complete clip. Keep that explicit replacement path as one call; production detectors use batches.
+    if model.predict is not _MODEL_PREDICT_ORIGINAL:
+        return model.predict(frames)
+    try:
+        batch_size = max(1, min(8, int(os.environ.get("BTF_SCAN_INFER_BATCH") or 2)))
+    except ValueError:
+        batch_size = 2
+    combined: model.Prediction | None = None
+    h: list[float] | None = None
+    c: list[float] | None = None
+    for offset in range(0, len(frames), batch_size):
+        if isolate.remaining(deadline) < isolate.infer_reserve_s():
+            break
+        part = model.predict(frames[offset:offset + batch_size])
+        if part is None:
+            return combined
+        if combined is None:
+            combined = part
+            h = [] if part.h is not None else None
+            c = [] if part.c is not None else None
+        elif (part.h is None) != (h is None) or (part.c is None) != (c is None):
+            raise ValueError("detector availability changed between inference batches")
+        if h is not None:
+            h.extend(part.h or [])
+        if c is not None:
+            c.extend(part.c or [])
+        if isolate.remaining(deadline) < isolate.infer_reserve_s():
+            break
+    if combined is None:
+        return None
+    return model.Prediction(
+        h=h, c=c, agreement=combined.agreement, h_name=combined.h_name,
+        c_name=combined.c_name, name=combined.name,
+    )
 
 
 def _ingredients_text(cred) -> str:

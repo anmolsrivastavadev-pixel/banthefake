@@ -151,10 +151,13 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_SCAN_CONCURRENCY` | `2` | Scans that may decode media and run the model at the same time (bounds memory). Further scans wait for a slot. |
 | `BTF_SCAN_WAIT_S` | `30` | Seconds a scan may wait for a slot before the server answers 503 `{"error": "busy"}` (with `Retry-After`). |
 | `BTF_SCAN_ISOLATION` | `on` | Runs every untrusted-media parser and decoder in spawned worker processes. `off`, `0`, `false` or `no` uses the in-process debugging path. Keep this on in production. |
-| `BTF_SCAN_TIMEOUT_S` | `30` | Hard wall-clock limit for one isolated parse/decode job. The worker is killed and replaced, and the API returns 504 `{"error": "scan_timeout"}`. |
+| `BTF_SCAN_TIMEOUT_S` | `30` | End-to-end wall-clock budget starting when the scan request begins. It covers upload streaming, queueing, isolated parsing, IPC/frame reconstruction and detector inference. An over-budget parser is killed and replaced, and the API returns 504 `{"error": "scan_timeout"}`. |
+| `BTF_SCAN_INFER_RESERVE_S` | `3` | Minimum budget that must remain before a detector call starts. With less time, inference is skipped and the report says the detector could not analyze the file because of the time budget. |
+| `BTF_SCAN_INFER_BATCH` | `2` | Number of sampled frames sent to the detector per call (1–8). The deadline is checked between calls. |
 | `BTF_SCAN_WORKER_JOBS` | `50` | Successful jobs handled by a parser worker before it is recycled. The parser pool size equals `BTF_SCAN_CONCURRENCY`. |
 | `BTF_SCAN_MAX_RSS_MB` | `1024` | Address-space/RSS budget per parser worker. Linux enforces `RLIMIT_AS`; all platforms also use a worker RSS watchdog and deterministic pixel/IPC limits. |
-| `BTF_SCAN_MAX_NOFILE` | `64` | File-descriptor limit per parser worker (minimum 16). Workers also have `RLIMIT_FSIZE=0` and a per-job CPU limit. |
+| `BTF_SCAN_MAX_NOFILE` | `64` | File-descriptor limit per parser worker (minimum 16). Workers also have a per-job CPU limit. |
+| `BTF_SCAN_TEMP_MB` | `64` | Per-worker private temporary-directory quota and `RLIMIT_FSIZE`. The directory is mode 0700, checked by a watchdog and removed when the worker exits. |
 | `BTF_SCAN_IPC_MB` | `32` | Maximum parser response size. It covers bounded metadata and raw, downsampled RGB frames returned to the parent for model inference. |
 | `BTF_SIGN_RATE` | `5` | Successful petition signatures per **hour** per client IP (honeypot hits count too). Rejected attempts (validation errors, duplicates) do not use this quota. Above it you get 429. |
 | `BTF_SIGN_ATTEMPT_RATE` | `30` | All petition sign attempts, valid or not, per **hour** per client IP. Above this you get 429. |
@@ -196,8 +199,11 @@ Notes:
   are JPEG, PNG, WEBP, GIF, HEIC/HEIF (only if this server's Pillow can open them) and MP4, MOV and WEBM.
 - **Media parsing is process-isolated.** Raw marker scans, Pillow/EXIF/XMP/PNG parsing, PyAV opening, seeking
   and decoding, and C2PA validation run in spawned workers. The parent kills and replaces a worker that hangs,
-  crashes or exceeds its limits. Workers return bounded RGB frame bytes; the detector models remain loaded once
-  in the parent. See [`docs/ISOLATION-DESIGN.md`](docs/ISOLATION-DESIGN.md) for the boundary and IPC contract.
+  crashes, is cancelled or exceeds its limits. Workers return a strictly validated JSON header followed by
+  bounded RGB frame bytes; the parent never unpickles worker output. Detector models remain loaded once in the
+  parent. See [`docs/ISOLATION-DESIGN.md`](docs/ISOLATION-DESIGN.md) for the boundary and IPC contract. A detector
+  call already executing in the parent cannot be interrupted; a hard per-call inference bound would require a
+  separately killable inference process.
 - **Petition validation**: name must be 1 to 100 characters, email must be valid and at most 254 characters,
   location must be at most 100 characters, and `consent` must be `true`. Emails are trimmed and lowercased, and
   each email can sign once. Emails must be ASCII, with no leading, trailing or consecutive dots in the local
