@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# BanTheFake: FastAPI app + CPU-only AI-image detector, runs offline at runtime.
+# BanTheFake: FastAPI app + two CPU-only AI-image detectors, runs offline at runtime.
 FROM python:3.12-slim
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
@@ -37,19 +37,30 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --index-url https://download.pytorch.org/whl/cpu "torch==${torch_version}"; \
     /app/.venv/bin/python -c "import torch; assert not torch.cuda.is_available(); print('torch', torch.__version__)"
 
-# 3) Bake the detector weights into the image so the container never needs the network.
-ARG BTF_MODEL_ID=buildborderless/CommunityForensics-DeepfakeDet-ViT
+# 3) Bake BOTH detector weights into the image so the container never needs the network.
+#    Primary (H) and secondary (C) models; custom ids need their *_REVISION set for reproducible builds.
+ARG BTF_MODEL_ID=haywoodsloan/ai-image-detector-deploy
 ARG BTF_MODEL_REVISION=
+ARG BTF_MODEL2_ID=buildborderless/CommunityForensics-DeepfakeDet-ViT
+ARG BTF_MODEL2_REVISION=
 ENV BTF_MODEL_ID=${BTF_MODEL_ID} \
-    BTF_MODEL_REVISION=${BTF_MODEL_REVISION}
-RUN /app/.venv/bin/python -c "\
-import os; \
-from transformers import AutoImageProcessor, AutoModelForImageClassification; \
-mid = os.environ['BTF_MODEL_ID']; default_id = 'buildborderless/CommunityForensics-DeepfakeDet-ViT'; \
-revision = os.environ['BTF_MODEL_REVISION'] or ('ac6ee457bea904a373065754107451793b56db00' if mid == default_id else None); \
-AutoImageProcessor.from_pretrained(mid, revision=revision); \
-AutoModelForImageClassification.from_pretrained(mid, revision=revision, use_safetensors=True); \
-print('cached', mid, revision)"
+    BTF_MODEL_REVISION=${BTF_MODEL_REVISION} \
+    BTF_MODEL2_ID=${BTF_MODEL2_ID} \
+    BTF_MODEL2_REVISION=${BTF_MODEL2_REVISION}
+RUN /app/.venv/bin/python - <<'PY'
+import os
+from transformers import AutoImageProcessor, AutoModelForImageClassification
+pinned = {
+    "haywoodsloan/ai-image-detector-deploy": "4ae1822603cb1ec980c217cfde1ef1b8e0477a16",
+    "buildborderless/CommunityForensics-DeepfakeDet-ViT": "ac6ee457bea904a373065754107451793b56db00",
+}
+for var in ("BTF_MODEL", "BTF_MODEL2"):
+    mid = os.environ[var + "_ID"]
+    revision = os.environ[var + "_REVISION"] or pinned.get(mid)
+    AutoImageProcessor.from_pretrained(mid, revision=revision)
+    AutoModelForImageClassification.from_pretrained(mid, revision=revision, use_safetensors=True)
+    print("cached", mid, revision)
+PY
 
 # 4) Application code.
 COPY app ./app

@@ -104,6 +104,20 @@ def test_trust_off_prevents_verified_verdict(client, monkeypatch):
     assert body["c2pa"]["valid"] and not body["c2pa"]["trusted"]
 
 
+def test_verified_capture_with_edits_never_claims_the_scene_is_real(client, monkeypatch):
+    from app.scan import c2pa_check
+
+    cred = c2pa_check.C2PAResult(
+        present=True, valid=True, trusted=True, signer="Camera Co", capture=True,
+        actions=["c2pa.created", "c2pa.cropped"], trust_list_version="2026-10-23",
+    )
+    monkeypatch.setattr(c2pa_check, "read", lambda path, mime: cred)
+    monkeypatch.setenv("BTF_MODEL", "off")
+    body = post(client, "capture.png", media.png())
+    assert body["verdict"] == "verified_capture"
+    assert "not that the scene itself is real" in body["verdict_detail"]
+
+
 def test_verified_capture_records_edits_and_wins_over_model(client, monkeypatch):
     from app.scan import c2pa_check
 
@@ -114,7 +128,7 @@ def test_verified_capture_records_edits_and_wins_over_model(client, monkeypatch)
     monkeypatch.setattr(c2pa_check, "read", lambda path, mime: cred)
     monkeypatch.setenv("BTF_MODEL", "auto")
     monkeypatch.setattr(model, "enabled", lambda: True)
-    monkeypatch.setattr(model, "predict", lambda frames: [0.99])
+    monkeypatch.setattr(model, "predict", media.fake_predict(0.99))
     monkeypatch.setattr(model, "name", lambda: "test detector")
     body = post(client, "capture.png", media.png())
     assert body["verdict"] == "verified_capture"
@@ -219,7 +233,6 @@ def test_corrupt_image_still_reports(client):
 def test_model_unavailable_degrades(client, monkeypatch):
     monkeypatch.setenv("BTF_MODEL", "auto")
     monkeypatch.setattr(model, "deps_installed", lambda: False)
-    monkeypatch.setattr(model, "_model", None)  # as if torch was never importable
     assert scan.capabilities()["model"] == "unavailable"
     assert client.get("/api/health").json()["model"] == "unavailable"
     body = post(client, "plain.png", media.png())

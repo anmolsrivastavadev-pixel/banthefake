@@ -186,3 +186,20 @@ def audio_only_mp4(seconds: float = 1.0) -> bytes:
             for packet in st.encode():
                 out.mux(packet)
         return path.read_bytes()
+
+
+def fake_predict(h: float | None, c: float | None = -1.0):
+    """A stand-in for `model.predict` giving every image the scores `h` (primary) and `c` (secondary).
+
+    `c` defaults to `h`; pass None for either to simulate that model failing to load.
+    """
+    from app.scan import model
+
+    if c == -1.0:
+        c = h
+
+    def predict(images):
+        n = len(images)
+        return model.Prediction(h=None if h is None else [h] * n, c=None if c is None else [c] * n)
+
+    return predict

@@ -20,7 +20,7 @@ def detector(monkeypatch):
 
     def predict(images):
         calls.append(images)
-        return [0.97 for _ in images]
+        return media.fake_predict(0.97)(images)
 
     monkeypatch.setenv("BTF_MODEL", "auto")
     monkeypatch.setattr(model, "predict", predict)

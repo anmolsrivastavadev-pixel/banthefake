@@ -54,9 +54,19 @@ class Coverage(TypedDict):
     duration_s: float | None  # video duration, if known
 
 
+class ModelScore(TypedDict):
+    name: str
+    ai_probability: float  # this model's P(AI); for videos, the mean of its most suspicious half of frames
+    frame_probabilities: NotRequired[list[float]]
+
+
 class ModelInfo(TypedDict):
     name: str
+    # The primary model's P(AI) (haywoodsloan), kept for compatibility. If only one model ran (the other failed to
+    # load, or BTF_MODEL_ENSEMBLE=off), it is that model's probability. The verdict comes from `decision`.
     ai_probability: float
+    decision: model.Tier  # combined decision: "likely" | "possible" | "none"
+    models: list[ModelScore]  # every model that ran, primary first
     frames_checked: int
     frame_probabilities: NotRequired[list[float]]
     frame_timestamps: NotRequired[list[float]]
@@ -228,10 +238,10 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         out.add("info", "The AI detector is unreliable on black-and-white or low-colour images.", 0.1)
     model_info, model_failure = _run_model(out, frames, kind, timestamps, duration, low_colour)
     if cred is not None and cred.valid and cred.trusted and model_info is not None:
-        p = model_info["ai_probability"]
-        if cred.capture and p >= model.LIKELY:
+        decision = model_info["decision"]
+        if cred.capture and decision == "likely":
             out.add("info", "The AI detector strongly disagrees with the trusted capture credentials; both results are shown, and the cryptographic provenance determines the verdict.", 0.5)
-        elif cred.ai_generated and p < model.POSSIBLE:
+        elif cred.ai_generated and decision == "none":
             out.add("info", "The AI detector found no strong AI signal, but the trusted content credentials declare generative AI; both results are shown, and the cryptographic provenance determines the verdict.", 0.5)
     detector_failed = model.enabled() and model_info is None
     if detector_failed:
@@ -294,28 +304,39 @@ def _run_model(
     out: _Collector, frames: list, kind: str, timestamps: list[float] | None = None,
     duration: float | None = None, low_colour: bool = False,
 ) -> tuple[ModelInfo | None, str | None]:
-    """Run the detector. Returns (info, None), or (None, reason) when it ran but gave no result."""
+    """Run the detectors. Returns (info, None), or (None, reason) when they ran but gave no result."""
     if not frames:
         return None, None
     try:
-        probs = model.predict(frames)
+        pred = model.predict(frames)
     except Exception:
         log.exception("model inference failed")
         return None, "the detector failed on this file"
-    if not probs:
+    if pred is None:
         return None, "the detector is not available on this server"
-    if kind == "video" and len(probs) > 1:
-        # Average of the most suspicious half of the frames: a partly synthetic clip is not diluted
-        # by its real frames, while a single odd frame cannot dominate.
-        top = sorted(probs, reverse=True)[: (len(probs) + 1) // 2]
-        p = sum(top) / len(top)
-    else:
-        p = probs[0]
-    info: ModelInfo = {"name": model.name(), "ai_probability": round(p, 4), "frames_checked": len(probs)}
+    tiers = pred.tiers()
+    video_mode = kind == "video" and len(tiers) > 1
+    # Video: decide per frame, then take the tier a majority of the most suspicious half of frames reaches.
+    # Reported probabilities are the mean of each model's most suspicious half, as before.
+    decision = model.aggregate(tiers) if video_mode else tiers[0]
+    scores: list[ModelScore] = []
+    for name, probs in pred.models():
+        entry: ModelScore = {
+            "name": name, "ai_probability": round(model.top_half_mean(probs) if video_mode else probs[0], 4),
+        }
+        if kind == "video":
+            entry["frame_probabilities"] = [round(x, 4) for x in probs]
+        scores.append(entry)
+    primary = pred.models()[0][1]
+    p = scores[0]["ai_probability"]
+    info: ModelInfo = {
+        "name": pred.display_name, "ai_probability": p, "decision": decision, "models": scores,
+        "frames_checked": len(tiers),
+    }
     coverage_note = partial = ""
     if kind == "video":
-        info["frame_probabilities"] = [round(x, 4) for x in probs]
-        if timestamps and len(timestamps) == len(probs):
+        info["frame_probabilities"] = [round(x, 4) for x in primary]
+        if timestamps and len(timestamps) == len(tiers):
             first, last = timestamps[0], timestamps[-1]
             dur = round(duration, 2) if duration else None
             info["frame_timestamps"] = timestamps
@@ -324,24 +345,43 @@ def _run_model(
             if dur and dur > 2 and last < 0.75 * dur:
                 partial = (f"The detector only reached {last:.1f} s of this {dur:.1f} s video (time limit), "
                            "so the rest was not checked.")
-    pct = _pct(p)
-    over = sum(x >= model.LIKELY for x in probs)
+    over = sum(t == "likely" for t in tiers)
     frames_note = (
-        f" (based on the most suspicious half of {len(probs)} sampled frames{coverage_note}; "
-        f"{over} of {len(probs)} rated likely AI)"
-        if kind == "video" and len(probs) > 1 else ""
+        f" (based on the most suspicious half of {len(tiers)} sampled frames{coverage_note}; "
+        f"{over} of {len(tiers)} rated likely AI)"
+        if video_mode else ""
     )
-    if p >= model.LIKELY:
-        out.add("model", f"Our detector model rates this {pct}% likely to be AI-generated{frames_note}. Detectors can be wrong.", p)
-    elif p >= model.POSSIBLE:
-        out.add("model", f"Our detector model sees possible signs of AI generation ({pct}%){frames_note}. Not conclusive.", p)
+    weight = max(s["ai_probability"] for s in scores)
+    score_text = _scores_text(scores)
+    if pred.missing:
+        out.add("info", f"One of the two detector models ({pred.missing}) could not be loaded, so this result comes from "
+                        "one model only and can at most show possible signs of AI.", 0.2)
+    if not pred.agreement:  # a single configured model (BTF_MODEL_ENSEMBLE=off)
+        if decision == "likely":
+            out.add("model", f"Our detector model rates this {score_text} likely to be AI-generated{frames_note}. Detectors can be wrong.", weight)
+        elif decision == "possible":
+            out.add("model", f"Our detector model sees possible signs of AI generation ({score_text}){frames_note}. Not conclusive.", weight)
+        elif not low_colour:
+            out.add("model", f"Our detector model found no strong AI signal ({score_text}){frames_note}. Detectors miss many fakes, so this does not mean it is real.", weight)
+    elif decision == "likely":
+        out.add("model", f"Both detector models agree this looks AI-generated ({score_text}){frames_note}. Detectors can be wrong.", weight)
+    elif decision == "possible":
+        why = "only one detector model was available" if pred.missing else "the two detector models do not both agree"
+        out.add("model", f"Our detector models see possible signs of AI generation ({score_text}){frames_note}, but {why}. Not conclusive.", weight)
     elif not low_colour:
-        out.add("model", f"Our detector model found no strong AI signal ({pct}%){frames_note}. Detectors miss many fakes, so this does not mean it is real.", p)
+        out.add("model", f"Our detector models found no strong AI signal ({score_text}){frames_note}. Detectors miss many fakes, so this does not mean it is real.", weight)
     if partial:
         out.add("info", partial, 0.2)
     if kind == "video" and duration is None:
         out.add("info", "The video duration is unknown, so detector coverage may be partial.", 0.2)
     return info, None
+
+
+def _scores_text(scores: list[ModelScore]) -> str:
+    """"ai-image-detector-deploy 99%, CommunityForensics-DeepfakeDet-ViT 97%", or "97%" for a single model."""
+    if len(scores) == 1:
+        return f"{_pct(scores[0]['ai_probability'])}%"
+    return ", ".join(f"{s['name'].rsplit('/', 1)[-1]} {_pct(s['ai_probability'])}%" for s in scores)
 
 
 def _pct(p: float) -> int:
@@ -352,7 +392,8 @@ def _pct(p: float) -> int:
 def _verdict(
     out: _Collector, cred, model_info: ModelInfo | None, detector_failed: bool = False, low_colour: bool = False
 ) -> tuple[Verdict, str, str]:
-    prob = model_info["ai_probability"] if model_info else None
+    decision = model_info["decision"] if model_info else None
+    scores = _scores_text(model_info["models"]) if model_info else "n/a"
     if cred is not None and cred.readable and cred.valid and cred.trusted and cred.capture:
         signer = cred.signer or cred.issuer or "a trusted signer"
         if cred.edit_actions:
@@ -381,11 +422,12 @@ def _verdict(
             else "The file carries markers left by AI generation tools."
         )
         return "ai", "AI-generation markers found", f"{detail} Markers can be removed, so their absence elsewhere proves nothing. {NO_PROOF}"
-    if prob is not None and prob >= model.LIKELY:
+    if decision == "likely" and not low_colour:  # never "likely" on black-and-white or low-colour images
+        agree = "both of our detector models agree it looks" if len(model_info["models"]) > 1 else "our detector model rates it"
         return (
             "ai",
             "Likely AI-generated",
-            f"No AI metadata, but our detector model rates it {_pct(prob)}% likely AI-made. "
+            f"No AI metadata, but {agree} AI-made ({scores}). "
             f"Detectors make mistakes, so check where the file came from. {NO_PROOF}",
         )
     if detector_failed:
@@ -396,16 +438,17 @@ def _verdict(
             "Edited, no AI markers found",
             f"It went through editing software. Edits can be harmless, so check the source. {NO_PROOF}",
         )
-    if prob is not None and prob >= model.POSSIBLE:
-        return (
-            "unknown",
-            "Possible signs of AI generation",
-            f"Our detector model sees some signs of AI ({_pct(prob)}%), but not enough to say so. {NO_PROOF}",
-        )
     if low_colour:
         return (
             "unknown", "Detector unreliable for this image",
-            f"Black-and-white and low-colour images are outside the detector's reliable range. {NO_PROOF}",
+            f"Black-and-white and low-colour images are outside the detector's reliable range, so its scores "
+            f"({scores}) cannot give an AI verdict either way. {NO_PROOF}",
+        )
+    if decision == "possible":
+        return (
+            "unknown",
+            "Possible signs of AI generation",
+            f"Our detector model sees some signs of AI ({scores}), but not enough to say so. {NO_PROOF}",
         )
     if out.has("camera"):
         return (

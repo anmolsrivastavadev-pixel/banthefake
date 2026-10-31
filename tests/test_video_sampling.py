@@ -57,7 +57,7 @@ def test_long_gop_respects_time_budget(long_gop, monkeypatch):
 
 def test_model_block_reports_coverage(client, long_gop, monkeypatch):
     monkeypatch.setenv("BTF_MODEL", "auto")
-    monkeypatch.setattr(model, "predict", lambda images: [0.1] * len(images))
+    monkeypatch.setattr(model, "predict", media.fake_predict(0.1))
     res = client.post("/api/scan", files={"file": ("v.mp4", long_gop.read_bytes())})
     m = res.json()["model"]
     cov = m["coverage"]
@@ -70,7 +70,7 @@ def test_model_block_reports_coverage(client, long_gop, monkeypatch):
 
 def test_partial_coverage_is_reported(client, long_gop, monkeypatch):
     monkeypatch.setenv("BTF_MODEL", "auto")
-    monkeypatch.setattr(model, "predict", lambda images: [0.1] * len(images))
+    monkeypatch.setattr(model, "predict", media.fake_predict(0.1))
     real_probe = video.probe
 
     def early_only(path, sample=video.SAMPLE_FRAMES):

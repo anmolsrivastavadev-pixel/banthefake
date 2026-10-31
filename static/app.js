@@ -164,18 +164,26 @@ function meter(p, label) {
   return el('div', { class: 'meter', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct(p)), 'aria-label': label }, fill);
 }
 
+const DECISION_READING = {
+  likely: 'Likely AI-generated',
+  possible: 'Possible signs of AI',
+  none: 'No strong AI signal',
+};
+
 function modelBlock(m) {
   const p = m.ai_probability;
-  const reading = p >= 0.85 ? 'Likely AI-generated' : p >= 0.5 ? 'Possible signs of AI' : 'No strong AI signal';
-  const b = block('AI detector model', [
-    ['Model', m.name],
-    ['Estimate', `${pct(p)}% · ${reading}`],
+  const models = Array.isArray(m.models) && m.models.length ? m.models : [{ name: m.name, ai_probability: p }];
+  const reading = DECISION_READING[m.decision] || '';
+  const b = block('AI detector models', [
+    ['Setup', m.name],
+    ['Combined reading', reading],
+    ...models.map(s => [s.name, `${pct(s.ai_probability)}% chance of AI`]),
     ['Frames checked', m.frames_checked > 1 ? String(m.frames_checked) : ''],
     ['Video covered', m.coverage ? `${m.coverage.first_s.toFixed(1)} s to ${m.coverage.last_s.toFixed(1)} s${m.coverage.duration_s ? ` of ${m.coverage.duration_s.toFixed(1)} s` : ''}` : ''],
   ]);
-  b.append(meter(p, 'Estimated chance this is AI-generated'));
+  for (const s of models) b.append(meter(s.ai_probability, `${s.name}: estimated chance this is AI-generated`));
   if (Array.isArray(m.frame_probabilities) && m.frame_probabilities.length > 1) {
-    const strip = el('div', { class: 'frames', role: 'img', 'aria-label': `Per-frame estimates: ${m.frame_probabilities.map(fp => `${pct(fp)}%`).join(', ')}` });
+    const strip = el('div', { class: 'frames', role: 'img', 'aria-label': `Per-frame estimates from ${models[0].name}: ${m.frame_probabilities.map(fp => `${pct(fp)}%`).join(', ')}` });
     m.frame_probabilities.forEach((fp, i) => {
       const bar = el('i', { class: meterClass(fp), title: `Frame ${i + 1}: ${pct(fp)}%` });
       bar.style.height = `${pct(fp)}%`;
@@ -183,7 +191,10 @@ function modelBlock(m) {
     });
     b.append(strip);
   }
-  b.append(el('p', { class: 'note' }, 'An estimate from a machine-learning model. It can be wrong both ways, and a low score does not mean the file is real.'));
+  if (models.length > 1) {
+    b.append(el('p', { class: 'note' }, '"Likely AI-generated" needs both models to agree; one model on its own can only show possible signs.'));
+  }
+  b.append(el('p', { class: 'note' }, 'Estimates from machine-learning models. They can be wrong both ways, and low scores do not mean the file is real.'));
   return b;
 }
 

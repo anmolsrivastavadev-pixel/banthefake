@@ -5,8 +5,8 @@ A self-hostable campaign site against harmful deepfakes, with working tools:
 - **Campaign site**: a static page (`static/index.html`, `static/app.js`, `static/styles.css`) plus a privacy
   notice (`static/privacy.html`), with no build step.
 - **Media scanner**: upload an image or video. The server checks it for AI-generator markers, IPTC "digital
-  source type", EXIF/XMP camera and editing-software metadata, and C2PA Content Credentials, and runs an optional
-  ML detector. The browser also shows a client-side ELA (error level analysis) heatmap.
+  source type", EXIF/XMP camera and editing-software metadata, and C2PA Content Credentials, and runs optional
+  ML detectors (two models that must agree). The browser also shows a client-side ELA (error level analysis) heatmap.
 - **Petition**: sign with name, email and an optional location. Signatures are stored in SQLite, and admins can
   export them or erase them (GDPR).
 - **Letter generator**: fill in a few details and copy a ready-to-send letter to a representative. This runs in
@@ -23,24 +23,40 @@ Read this before you rely on a result.
   with a capture claim, and has not changed since the signed history. This proves where the file came from,
   but a camera can still photograph a screen or a staged scene. A `camera` or `unknown` verdict does not mean
   the file is real; it only means no evidence of AI generation was found.
+
+| Verdict | What it is evidence of | What it does not prove |
+|---|---|---|
+| `verified_capture` | A trusted C2PA signer declares a camera capture, and the bytes are unchanged since signing. | That the scene was real. It can be a photo of a screen or a staged scene. |
+| `verified_ai` | A trusted C2PA signer declares generative-AI involvement, and the bytes are unchanged since signing. | Which parts are synthetic, or whether other copies differ. |
+| `ai` | AI-generator markers in metadata, or both detector models agreed it looks AI-generated. | That it is definitely AI; markers can be faked and detectors make mistakes. |
+| `edited` | Editing software is named, with no AI markers found. | That the edit was harmless, or that the unedited original was real. |
+| `camera` | Camera EXIF is present, with no AI markers found. | That the file is real; EXIF can be copied, edited or faked. |
+| `unknown` | Nothing conclusive was found either way. | That the file is real. Absence of evidence is not evidence of absence. |
+
 - **Most metadata does not survive sharing.** Social apps and messengers (WhatsApp, Instagram, X, Facebook and
   others) usually strip EXIF, XMP and C2PA data, and anyone can remove it on purpose. If markers are missing,
   that tells you nothing. Markers that are present are strong evidence, but they can be forged too.
-- **The ML detector is a heuristic.** The default model is
-  [`buildborderless/CommunityForensics-DeepfakeDet-ViT`](https://huggingface.co/buildborderless/CommunityForensics-DeepfakeDet-ViT)
-  (MIT licence, about 87 MB, runs on CPU). It outputs P(AI-generated). A score of 0.85 or more gives a
-  "Likely AI-generated" verdict, and 0.5 to 0.85 gives "Possible signs of AI generation". It is good on many
-  diffusion and GAN images but borderline on some, such as some Midjourney images (the
-  `ai_midjourney_city.jpg` fixture scores in the "possible" band). Heavy recompression, resizing,
-  screenshots and new generators all lower its accuracy. A low score never means "real".
+- **The ML detector is a heuristic: two models must agree.** Two pinned CPU models score every image and every
+  sampled video frame (see [Detector models](#detector-models)). "Likely AI-generated" needs both to agree: the
+  primary model at 0.98 or more **and** the secondary model at 0.05 or more. If only one of them is
+  suspicious (primary at 0.98 or more, or secondary at 0.5 or more), the result is "Possible signs of AI
+  generation". In our benchmark ([`docs/DETECTOR-BENCHMARK.md`](docs/DETECTOR-BENCHMARK.md)), the "likely" rule
+  flagged 0 of 157 held-out real images (95% upper bound about 2.4%). It caught 39 of 51 held-out AI images
+  (76%), including 24 of 28 Midjourney images. The previous single-model setup caught 57% overall and 18 of 28
+  Midjourney images. Zero false positives in a small test does not mean the detector never makes mistakes.
+  The test images come from Wikimedia Commons, not social media. Heavy recompression, resizing, screenshots,
+  newer generators (GPT-image recall is weak) and deliberate evasion all lower accuracy. A low score never
+  means "real". Black-and-white and low-colour images never get an AI verdict from the models, because the
+  models are unreliable on them.
 - **No face-swap or lip-sync detection.** The detector classifies whole images and sampled video frames (up to
   8 frames spread over the whole clip, with a 20 s decode budget). On videos with keyframes far apart the
   sampler decodes forward in one pass instead of seeking; the report says which part of the clip was covered
   (`model.coverage`), and adds a note when the time budget ran out early. It is not trained to find a face
   swapped into an otherwise real photo or video. A dedicated face detector was researched but not shipped:
   the credible checkpoint has unresolved training-data rights, high CPU/RAM cost, and no openly licensed
-  benchmark large enough to establish its false-positive rate. `docs/LIMITS-PLAN.md` records the gates for
-  revisiting it.
+  benchmark large enough to establish its false-positive rate. We also measured the best openly licensed
+  candidate on 36 real faces: it flagged 92% of them as fake at a 0.5 threshold, so it is nowhere near
+  shippable. `docs/LIMITS-PLAN.md` records the gates for revisiting it.
 - **Brand names only count where software is named.** A tool name such as "Midjourney" or "Firefly" is only
   treated as a marker in fields that name the creating software: EXIF `Software`/`ProcessingSoftware`, XMP
   `CreatorTool`/history `softwareAgent`, PNG generator keys (`parameters`, `prompt`, `workflow`, `Software`),
@@ -66,9 +82,50 @@ uv run uvicorn app.main:app --reload
 
 Open <http://127.0.0.1:8000>.
 
-With the `ml` extra installed, the detector loads in the background at startup (`/api/health` reports
-`"model": "loading"`, then `"loaded"`). On first use it downloads the weights (about 87 MB) from the Hugging
-Face Hub into `HF_HOME`. Set `BTF_MODEL=off` to disable it.
+With the `ml` extra installed, both detector models load in the background at startup (`/api/health` reports
+`"model": "loading"`, then `"loaded"`). On first use they download about 840 MB of weights from the Hugging Face
+Hub into `HF_HOME`. Set `BTF_MODEL=off` to disable the detector. Budget about 2.5 GB of RAM for the process
+(see [Detector models](#detector-models)).
+
+### Detector models
+
+| Role | Model | Licence | Weights | Pinned revision |
+|---|---|---|---:|---|
+| Primary (H) | [`haywoodsloan/ai-image-detector-deploy`](https://huggingface.co/haywoodsloan/ai-image-detector-deploy) (SwinV2, AutoTrain) | Apache-2.0 | 745 MB | `4ae1822603cb1ec980c217cfde1ef1b8e0477a16` |
+| Secondary (C) | [`buildborderless/CommunityForensics-DeepfakeDet-ViT`](https://huggingface.co/buildborderless/CommunityForensics-DeepfakeDet-ViT) (ViT-S) | MIT | 97 MB | `ac6ee457bea904a373065754107451793b56db00` |
+
+Licences are taken from each model card at the pinned revision. H's training data is not published.
+
+| Decision (per image or frame) | Rule |
+|---|---|
+| Likely AI-generated | H >= 0.98 and C >= 0.05 |
+| Possible signs of AI | otherwise, H >= 0.98 or C >= 0.5 |
+| No strong signal | everything else |
+
+How the rule behaves in special cases:
+
+- **Low-colour images** never get "likely".
+- **Videos** are decided frame by frame. The clip gets the tier that a majority of its most suspicious half of
+  frames reaches: with 8 frames, 3 must be "likely".
+- **If one model fails to load,** the other still runs, but the result can at most be "possible". The report
+  says which model is missing.
+- **`BTF_MODEL_ENSEMBLE=off`** runs only C, with its previous thresholds: 0.85 for "likely" and 0.5 for
+  "possible".
+
+The thresholds were chosen on a calibration split and confirmed on a locked test split. Details are in
+[`docs/DETECTOR-BENCHMARK.md`](docs/DETECTOR-BENCHMARK.md).
+
+Measured on an Apple M5 (CPU, torch default of 4 threads, warm models):
+
+| | H | C | Both (as shipped) |
+|---|---:|---:|---:|
+| Per image, median | 252 ms | 73 ms | 332 ms |
+| Per image, batch of 8 video frames | 240 ms | 63 ms | about 300 ms |
+| Load time (weights cached) | 1.5 s | 1.2 s | 1.6 s |
+| Process RSS after first scan | 1.43 GB | 0.64 GB | 1.52 GB |
+| Peak process RSS after a batch of 8 | 2.27 GB | 0.70 GB | 2.46 GB |
+
+RSS includes about 0.22 GB for Python, torch and the app. Expect slower inference on small cloud vCPUs.
 
 ## Configuration
 
@@ -86,8 +143,11 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_PETITION_GOAL` | `10000` | The `goal` returned by `/api/petition/count`. |
 | `BTF_ADMIN_TOKEN` | unset | Bearer token for export and erase. While it is unset, the admin endpoints return 404. |
 | `BTF_MODEL` | `auto` | `off`, `0`, `false` or `no` disables the ML detector. Any other value enables it when the `ml` extra is installed. |
-| `BTF_MODEL_ID` | `buildborderless/CommunityForensics-DeepfakeDet-ViT` | Hugging Face model id or local path for the detector. It must be an image-classification model with a single "AI" logit or a fake/real head. |
-| `BTF_MODEL_REVISION` | pinned commit for the default model; unset for a custom model | Exact Hugging Face commit/tag to load. Set this when using a remote custom model so deployments are reproducible. |
+| `BTF_MODEL_ID` | `haywoodsloan/ai-image-detector-deploy` | Primary detector (H): Hugging Face model id or local path. It must be an image-classification model with a single "AI" logit or a fake/real head. |
+| `BTF_MODEL_REVISION` | pinned commit for the default model; unset for a custom model | Exact Hugging Face commit/tag for the primary model. Set this when using a remote custom model so deployments are reproducible. |
+| `BTF_MODEL2_ID` | `buildborderless/CommunityForensics-DeepfakeDet-ViT` | Secondary detector (C), same requirements as `BTF_MODEL_ID`. |
+| `BTF_MODEL2_REVISION` | pinned commit for the default model; unset for a custom model | Exact commit/tag for the secondary model. |
+| `BTF_MODEL_ENSEMBLE` | `on` | `off`, `0`, `false` or `no` runs only the secondary model with its previous thresholds (likely >= 0.85, possible >= 0.5). Otherwise both models run and "likely" needs both to agree. The thresholds were calibrated for the default pair; custom models need their own calibration. |
 | `BTF_MODEL_THREADS` | unset (torch default) | Integer passed to `torch.set_num_threads`. |
 | `BTF_MAX_IMAGE_PIXELS` | `120000000` | Images larger than this many pixels are refused (decompression-bomb guard). |
 | `BTF_MAX_DECODE_PIXELS` | `25000000` | Largest image decoded at full size for the detector. JPEGs above it are decoded at 1/2, 1/4 or 1/8 scale; other formats above it are not analyzed by the detector (the report says so). |
@@ -139,7 +199,16 @@ Example scan report:
     {"kind": "model", "text": "...", "weight": 0.99}
   ],
   "c2pa": null,
-  "model": {"name": "CommunityForensics-DeepfakeDet-ViT", "ai_probability": 0.9941, "frames_checked": 1},
+  "model": {
+    "name": "haywoodsloan/ai-image-detector-deploy + CommunityForensics-DeepfakeDet-ViT (agreement)",
+    "ai_probability": 0.9999,
+    "decision": "likely",
+    "models": [
+      {"name": "haywoodsloan/ai-image-detector-deploy", "ai_probability": 0.9999},
+      {"name": "CommunityForensics-DeepfakeDet-ViT", "ai_probability": 0.9941}
+    ],
+    "frames_checked": 1
+  },
   "file": {"type": "image", "mime": "image/jpeg", "size_bytes": 123456, "width": 1024, "height": 1024}
 }
 ```
@@ -152,8 +221,19 @@ untrusted manifests remain informational. The `kind` of a signal is one of `ai`,
 `camera`, `c2pa`, `model` or `info`. Marker signals (`ai`, `edit`) also have `field` (where the marker was
 found) and `snippet` (the matched text, at most 80 characters). When present, `c2pa` has the fields `present`,
 `valid`, `trusted`, `generator`, `issuer`, `signer`, `signed_at`, `capture`, `ai_generated`, `actions`,
-`edits`, `ingredients` and `trust_list_version`. For videos, `model` also has
-`frame_probabilities`, `frame_timestamps` and `coverage` (`first_s`, `last_s`, `duration_s`).
+`edits`, `ingredients` and `trust_list_version`.
+
+When present, `model` has these fields:
+
+- `decision` (`likely`, `possible` or `none`) is the combined result that drives the verdict.
+- `models` lists every model that ran, primary first, as `{name, ai_probability}`.
+- `ai_probability` is kept for compatibility. It is the **primary** model's probability, or the only model's
+  when just one ran (one failed to load, or `BTF_MODEL_ENSEMBLE=off`). Do not threshold it yourself; use
+  `decision`.
+
+For videos, each `ai_probability` is the mean of that model's most suspicious half of frames. `model` also has
+`frame_probabilities` (primary model), `frame_timestamps` and `coverage` (`first_s`, `last_s`, `duration_s`).
+Each `models` entry also has its own `frame_probabilities`.
 
 ### Updating the C2PA trust list
 
@@ -230,9 +310,10 @@ The image works like this:
 - **c2pa-python** is pinned to `0.38.1` in `pyproject.toml`, which has Linux (manylinux 2.28, x86_64 and
   aarch64) and macOS wheels, and installs straight from the lock. (`0.38.2` was published with macOS wheels
   only, so do not bump past it without checking that Linux wheels exist.)
-- **Model weights.** The detector weights are downloaded at build time into `HF_HOME=/opt/hf`, and the
-  container runs with `HF_HUB_OFFLINE=1`, so it needs no network at runtime. Use `--build-arg BTF_MODEL_ID=...`
-  to bake in a different model.
+- **Model weights.** Both pinned detectors (about 840 MB) are downloaded at build time into `HF_HOME=/opt/hf`,
+  and the container runs with `HF_HUB_OFFLINE=1`, so it needs no network at runtime. Use
+  `--build-arg BTF_MODEL_ID=... --build-arg BTF_MODEL_REVISION=...` (or `BTF_MODEL2_ID`/`BTF_MODEL2_REVISION`)
+  to bake in different models.
 - **Starting the server.** The CMD runs the venv's `uvicorn` directly. Do not use `uv run` inside the image,
   because it would re-sync and reinstall CUDA torch.
 
@@ -254,7 +335,7 @@ replicas, each process has its own counters, so the effective limit becomes N ti
 a single worker (the image does), or replace the limiter with a shared store such as Redis, or enforce limits
 at the proxy. One process is enough for moderate traffic: scans run in a threadpool, at most
 `BTF_SCAN_CONCURRENCY` at a time (each can hold a decoded image of up to 25 MP plus the model's working memory,
-so size this to your RAM), and model inference is serialised. The scan slots are also per process.
+so size this to your RAM), and inference is serialised per model. The scan slots are also per process.
 
 ### Persistence
 

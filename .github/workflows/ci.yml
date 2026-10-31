@@ -25,8 +25,10 @@ jobs:
   test-ml:
     runs-on: ubuntu-latest
     env:
-      BTF_MODEL_ID: buildborderless/CommunityForensics-DeepfakeDet-ViT
-      BTF_MODEL_REVISION: ac6ee457bea904a373065754107451793b56db00
+      BTF_MODEL_ID: haywoodsloan/ai-image-detector-deploy
+      BTF_MODEL_REVISION: 4ae1822603cb1ec980c217cfde1ef1b8e0477a16
+      BTF_MODEL2_ID: buildborderless/CommunityForensics-DeepfakeDet-ViT
+      BTF_MODEL2_REVISION: ac6ee457bea904a373065754107451793b56db00
       HF_HOME: ${{ github.workspace }}/.cache/huggingface
     steps:
       - uses: actions/checkout@v4
@@ -47,11 +49,20 @@ jobs:
           uv pip install --python .venv/bin/python --no-deps \
             --index-url https://download.pytorch.org/whl/cpu "torch==${torch_version}"
           .venv/bin/python -c "import torch; assert not torch.cuda.is_available(); print('torch', torch.__version__)"
-      - name: Cache detector weights
+      - name: Cache detector weights (both models)
         uses: actions/cache@v4
         with:
           path: ${{ env.HF_HOME }}
-          key: hf-${{ runner.os }}-${{ env.BTF_MODEL_ID }}-${{ env.BTF_MODEL_REVISION }}
+          key: hf-${{ runner.os }}-${{ env.BTF_MODEL_ID }}-${{ env.BTF_MODEL_REVISION }}-${{ env.BTF_MODEL2_ID }}-${{ env.BTF_MODEL2_REVISION }}
+      - name: Prefetch both pinned detectors
+        run: |
+          .venv/bin/python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          for var in ("BTF_MODEL", "BTF_MODEL2"):
+              snapshot_download(os.environ[var + "_ID"], revision=os.environ[var + "_REVISION"],
+                                allow_patterns=["config.json", "preprocessor_config.json", "model.safetensors"])
+          PY
       - run: uv run pytest -q -m ml
         env:
           UV_NO_SYNC: "1"
@@ -90,4 +101,6 @@ jobs:
           curl --fail --silent \
             --form file=@tests/fixtures/ai_dalle_mars.jpg \
             http://127.0.0.1:8000/api/scan \
-            | jq -e '.verdict == "ai"'
+            | tee scan.json \
+            | jq -e '.verdict == "ai" and .model.decision == "likely" and (.model.models | length) == 2' \
+            || { cat scan.json; docker logs "$container"; exit 1; }

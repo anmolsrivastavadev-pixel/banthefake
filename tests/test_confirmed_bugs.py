@@ -96,7 +96,7 @@ def piped_webm(tmp_path_factory):
 
 def test_unknown_duration_video_decodes_forward_and_reports_partial(client, piped_webm, monkeypatch):
     monkeypatch.setenv("BTF_MODEL", "auto")
-    monkeypatch.setattr(model, "predict", lambda images: [0.1] * len(images))
+    monkeypatch.setattr(model, "predict", media.fake_predict(0.1))
     info = video.probe(piped_webm)
     assert info.duration_s is None and len(info.frames) >= 3
     assert info.timestamps == sorted(info.timestamps) and info.timestamps[-1] >= 10
@@ -108,7 +108,7 @@ def test_low_colour_low_score_stays_unknown_without_reassurance(client, monkeypa
     buf = io.BytesIO()
     Image.linear_gradient("L").resize((256, 256)).save(buf, "PNG")
     monkeypatch.setenv("BTF_MODEL", "auto")
-    monkeypatch.setattr(model, "predict", lambda images: [0.01])
+    monkeypatch.setattr(model, "predict", media.fake_predict(0.01))
     body = _scan(client, "gray.png", buf.getvalue())
     assert body["verdict"] == "unknown"
     assert any("unreliable on black-and-white or low-colour" in s["text"] for s in body["signals"])

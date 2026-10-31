@@ -60,13 +60,39 @@ Plan:
 - Try mean/max/stacked ensembles with a held-out split; recalibrate thresholds for ≤2% real FPR.
 - Ship only if test-split numbers improve Midjourney recall without raising FPR. Otherwise document.
 
-Status: in progress. The first 18-image smoke test found 83.3% recall at 0.5 and 61.1% at 0.85, but it had
+Status: shipped (2026-10-31) as a two-model agreement rule; see `docs/DETECTOR-BENCHMARK.md`. The benchmark
+has 698 audited Commons originals: 169 AI (89 Midjourney) and 529 real, including 100 black-and-white and 100
+graphics. It also has 570 degraded variants. Everything is split by source group into train, calibration and
+locked test (seed 7). On its own, `haywoodsloan/ai-image-detector-deploy` (H, Apache-2.0) had the best recall,
+but at 0.98 it called 2 of 157 locked-test real images "likely AI". The app now runs H and the previous model,
+CommunityForensics (C), and needs them to agree:
+
+- "Likely": H >= 0.98 and C >= 0.05.
+- "Possible": H >= 0.98 or C >= 0.5. This threshold was chosen on calibration only, for a real-image rate of
+  10% or less; it measured 1.2%.
+
+Results:
+
+| Split | Real false positives | AI recall | Midjourney recall |
+|---|---:|---:|---:|
+| Calibration | 0/160 | 36/49 | 21/26 |
+| Locked test | 0/157 (Wilson upper bound about 2.4%) | 39/51 (76%) | 24/28 |
+| Previous production rule (C >= 0.85), locked test | 0/157 | 57% | 18/28 |
+
+The "likely" rule also fired on none of the 402 degraded real variants. At "possible", the locked test had 2/157
+real images and 47/51 AI images.
+
+Midjourney recall improved without raising the false-positive rate, so the shipping gate is met. Caveats: the
+test set is small (51 AI), its images come from Commons rather than social media, GPT-image recall is weak, and
+there are no adversarial tests.
+
+History: the first 18-image smoke test found 83.3% recall at 0.5 and 61.1% at 0.85, but it had
 no real controls and is not decision evidence. Independent review rejected the initial harness because loose
 category search contaminated labels, individual thresholds were calibrated on their evaluation images, hard
 real strata were excluded from calibration, model revisions were mutable, and score caches were not tied to
 actual bytes. The replacement uses reviewed exact category roots, explicit human audit status, byte and
 perceptual hashes, pinned safetensors-only model snapshots, and source-grouped train/calibration/locked-test
-partitions. No model change ships without a sufficiently large confirmation set.
+partitions.
 
 ## Limit 3 — no face-swap detection
 Plan:
