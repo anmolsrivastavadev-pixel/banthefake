@@ -13,6 +13,27 @@ from app.config import Settings  # noqa: E402
 from app.main import create_app  # noqa: E402
 
 ADMIN = "s3cret-token"
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def pytest_collection_modifyitems(config, items):
+    from app.scan import model
+
+    if model.deps_installed():
+        return
+    skip = pytest.mark.skip(reason="ml extra (torch + transformers) not installed: uv sync --extra ml")
+    for item in items:
+        if "ml" in item.keywords:
+            item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _model_off_unless_ml(request, monkeypatch):
+    """Keep regular tests fast and deterministic: the detector only runs in tests marked `ml`."""
+    if request.node.get_closest_marker("ml") is None:
+        monkeypatch.setenv("BTF_MODEL", "off")
+    else:
+        monkeypatch.delenv("BTF_MODEL", raising=False)
 
 
 @pytest.fixture

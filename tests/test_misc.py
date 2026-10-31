@@ -1,7 +1,7 @@
 def test_health(client):
     body = client.get("/api/health").json()
     assert body["ok"] is True
-    assert body["model"] in {"loaded", "off", "unavailable"}
+    assert body["model"] in {"loaded", "loading", "off", "unavailable"}
     assert isinstance(body["c2pa"], bool)
 
 

@@ -3,11 +3,20 @@ name = "banthefake"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "av>=19.0.2",
+    "c2pa-python>=0.38.2",
     "defusedxml>=0.7.1",
     "fastapi>=0.162.0",
+    "numpy>=2.5.4",
     "pillow>=13.0.0",
     "python-multipart>=0.0.32",
     "uvicorn[standard]>=0.54.0",
+]
+
+[project.optional-dependencies]
+ml = [
+    "torch>=2.15.0",
+    "transformers>=5.22.1",
 ]
 
 [dependency-groups]
@@ -19,3 +28,4 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["ml: needs the ml extra (torch + transformers) and the detector weights"]

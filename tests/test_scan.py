@@ -25,7 +25,7 @@ def test_scan_returns_report(client):
     body = res.json()
     assert body["verdict"] in {"ai", "edited", "camera", "unknown"}
     assert {"verdict_title", "verdict_detail", "signals", "c2pa", "model", "file"} <= body.keys()
-    assert body["file"] == {"type": "image", "mime": "image/png", "size_bytes": len(data)}
+    assert body["file"] == {"type": "image", "mime": "image/png", "size_bytes": len(data), "width": 8, "height": 8}
 
 
 def test_scan_oversize_413(make_client):

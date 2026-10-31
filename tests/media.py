@@ -1,0 +1,76 @@
+"""Synthetic media builders for tests."""
+
+import io
+import struct
+import zlib
+
+from PIL import ExifTags, Image, PngImagePlugin
+
+XMP_AI = (
+    '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+    '<rdf:Description xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" '
+    'Iptc4xmpExt:DigitalSourceType="http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"/>'
+    '</rdf:RDF></x:xmpmeta><?xpacket end="w"?>'
+)
+SD_PARAMETERS = (
+    "a cat astronaut, highly detailed\nNegative prompt: blurry\n"
+    "Steps: 30, Sampler: DPM++ 2M Karras, CFG scale: 7, Seed: 1234, Size: 512x512, Model: sd_xl_base_1.0"
+)
+
+
+def _gradient(size=(64, 48)) -> Image.Image:
+    im = Image.new("RGB", size)
+    im.putdata([(x * 4 % 256, y * 5 % 256, (x + y) % 256) for y in range(size[1]) for x in range(size[0])])
+    return im
+
+
+def jpeg(exif: dict[int, str] | None = None, xmp: str | None = None, exif_ifd: dict[int, object] | None = None) -> bytes:
+    im = _gradient()
+    kwargs = {}
+    if exif or exif_ifd:
+        e = Image.Exif()
+        for k, v in (exif or {}).items():
+            e[k] = v
+        if exif_ifd:
+            e.get_ifd(ExifTags.IFD.Exif).update(exif_ifd)
+        kwargs["exif"] = e
+    if xmp:
+        kwargs["xmp"] = xmp.encode()
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=90, **kwargs)
+    return buf.getvalue()
+
+
+def png(text: dict[str, str] | None = None, compressed: bool = False) -> bytes:
+    info = PngImagePlugin.PngInfo()
+    for k, v in (text or {}).items():
+        if compressed:
+            info.add_itxt(k, v, zip=True)
+        else:
+            info.add_text(k, v)
+    buf = io.BytesIO()
+    _gradient().save(buf, "PNG", pnginfo=info)
+    return buf.getvalue()
+
+
+def canon_jpeg() -> bytes:
+    T = ExifTags.Base
+    return jpeg(
+        {T.Make: "Canon", T.Model: "Canon EOS R5", T.Software: "Firmware Version 1.8.1"},
+        exif_ifd={T.ExposureTime: 0.004, T.FNumber: 2.8, T.DateTimeOriginal: "2024:05:01 10:00:00"},
+    )
+
+
+def photoshop_jpeg() -> bytes:
+    return jpeg({ExifTags.Base.Software: "Adobe Photoshop 25.0 (Windows)"})
+
+
+def huge_png(width: int = 20000, height: int = 20000) -> bytes:
+    """A tiny PNG whose header claims a huge size (decompression-bomb shape)."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"\0" * 64)) + chunk(b"IEND", b"")

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -58,7 +59,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     sign_limiter = RateLimiter(settings.sign_rate, 3600)
     scan_limiter = RateLimiter(settings.scan_rate, 60)
 
-    app = FastAPI(title="BanTheFake", docs_url=None, redoc_url=None, openapi_url=None)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        scan.warmup()  # start loading the detector model in the background
+        yield
+
+    app = FastAPI(title="BanTheFake", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.settings = settings
     app.state.store = store
 
@@ -169,6 +175,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return report
         except UploadError as exc:
             return error(exc.status, exc.message)
+        except scan.UnsupportedMedia as exc:
+            return error(415, str(exc))
         except Exception:
             log.exception("scan failed")
             return error(500, "Scan failed.")

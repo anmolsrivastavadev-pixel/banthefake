@@ -72,7 +72,8 @@ async function scan(file) {
   }
   if (seq !== scanSeq) return;
   if (!res.ok) {
-    const [title, detail] = SCAN_ERRORS[res.status] || ['Scan failed', data.error || 'Something went wrong. Please try again.'];
+    let [title, detail] = SCAN_ERRORS[res.status] || ['Scan failed', data.error || 'Something went wrong. Please try again.'];
+    if (res.status === 415 && data.error) detail = data.error;
     setVerdict('caution', title, detail);
     return;
   }
@@ -87,34 +88,74 @@ function renderReport(r) {
   }));
 
   const blocks = [];
-  if (r.c2pa) {
-    const c = r.c2pa;
-    const rows = [
-      ['Signature', c.valid ? 'Valid' : 'Invalid or untrusted'],
-      ['AI-generated', c.ai_generated ? 'Yes, declared in credentials' : 'Not declared'],
-      ['Made with', c.generator],
-      ['Signed by', c.issuer],
-      ['Actions', (c.actions || []).join(', ')],
-    ];
-    blocks.push(block('Content credentials (C2PA)', rows));
-  }
-  if (r.model) {
-    const m = r.model;
-    blocks.push(block('AI detector model', [
-      ['Model', m.name],
-      ['AI probability', `${Math.round(m.ai_probability * 100)}%`],
-      ['Frames checked', String(m.frames_checked)],
-    ]));
-  }
+  if (r.c2pa) blocks.push(c2paBlock(r.c2pa));
+  if (r.model) blocks.push(modelBlock(r.model));
   if (r.file) {
     const f = r.file;
     blocks.push(block('File', [
       ['Type', f.mime],
       ['Size', formatSize(f.size_bytes)],
       ['Dimensions', f.width && f.height ? `${f.width} × ${f.height}` : ''],
+      ['Duration', f.duration_s ? `${f.duration_s.toFixed(1)} s` : ''],
     ]));
   }
   detailsEl.replaceChildren(...blocks);
+}
+
+function c2paBlock(c) {
+  if (!c.generator && !c.issuer && !(c.actions || []).length) {
+    return block('Content credentials (C2PA)', [['Status', 'Found, but could not be read']]);
+  }
+  let signature = 'Does NOT validate: the file may have been changed after signing';
+  if (c.valid && c.trusted) signature = 'Valid, signer is on the trust list';
+  else if (c.valid) signature = 'Intact, but the signer is not on our trust list';
+  const actions = (c.actions || []).map(a => a.replace(/^c2pa\./, '').replace(/_/g, ' '));
+  const b = block('Content credentials (C2PA)', [
+    ['AI-generated', c.ai_generated ? 'Yes, declared in the credentials' : 'Not declared'],
+    ['Made with', c.generator],
+    ['Signed by', c.issuer],
+    ['Signature', signature],
+    ['Actions', actions.join(', ')],
+  ]);
+  if (c.ai_generated) b.classList.add('flag');
+  b.append(el('p', { class: 'note' }, 'Check the full history at contentcredentials.org/verify.'));
+  return b;
+}
+
+function pct(p) {
+  return Math.max(1, Math.min(99, Math.round(p * 100)));
+}
+
+function meterClass(p) {
+  return p >= 0.85 ? 'high' : p >= 0.5 ? 'mid' : 'low';
+}
+
+function meter(p, label) {
+  const fill = el('i', { class: meterClass(p) });
+  fill.style.width = `${pct(p)}%`;
+  return el('div', { class: 'meter', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct(p)), 'aria-label': label }, fill);
+}
+
+function modelBlock(m) {
+  const p = m.ai_probability;
+  const reading = p >= 0.85 ? 'Likely AI-generated' : p >= 0.5 ? 'Possible signs of AI' : 'No strong AI signal';
+  const b = block('AI detector model', [
+    ['Model', m.name],
+    ['Estimate', `${pct(p)}% · ${reading}`],
+    ['Frames checked', m.frames_checked > 1 ? String(m.frames_checked) : ''],
+  ]);
+  b.append(meter(p, 'Estimated chance this is AI-generated'));
+  if (Array.isArray(m.frame_probabilities) && m.frame_probabilities.length > 1) {
+    const strip = el('div', { class: 'frames', 'aria-label': 'Per-frame estimates' });
+    m.frame_probabilities.forEach((fp, i) => {
+      const bar = el('i', { class: meterClass(fp), title: `Frame ${i + 1}: ${pct(fp)}%` });
+      bar.style.height = `${pct(fp)}%`;
+      strip.append(el('span', {}, bar));
+    });
+    b.append(strip);
+  }
+  b.append(el('p', { class: 'note' }, 'An estimate from a machine-learning model. It can be wrong both ways, and a low score does not mean the file is real.'));
+  return b;
 }
 
 function block(title, rows) {
