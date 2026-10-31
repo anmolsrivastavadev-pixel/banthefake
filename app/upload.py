@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import BinaryIO
 
+from python_multipart.exceptions import FormParserError
 from python_multipart.multipart import MultipartParser, MultipartState, parse_options_header
 from starlette.requests import Request
 
@@ -67,9 +68,8 @@ async def receive_file(request: Request, dest: BinaryIO, field: str, max_bytes: 
     def on_part_end() -> None:
         state["in_target"] = False
 
-    parser = MultipartParser(
-        boundary,
-        {
+    try:
+        parser = MultipartParser(boundary, {
             "on_part_begin": on_part_begin,
             "on_header_field": on_header_field,
             "on_header_value": on_header_value,
@@ -77,8 +77,9 @@ async def receive_file(request: Request, dest: BinaryIO, field: str, max_bytes: 
             "on_headers_finished": on_headers_finished,
             "on_part_data": on_part_data,
             "on_part_end": on_part_end,
-        },
-    )
+        })
+    except FormParserError as exc:
+        raise UploadError(400, "Malformed upload.") from exc
     received = 0
     async for chunk in request.stream():
         received += len(chunk)
@@ -90,7 +91,10 @@ async def receive_file(request: Request, dest: BinaryIO, field: str, max_bytes: 
             raise
         except Exception as exc:
             raise UploadError(400, "Malformed upload.") from exc
-    parser.finalize()
+    try:
+        parser.finalize()
+    except FormParserError as exc:
+        raise UploadError(400, "Malformed upload.") from exc
     if parser.state != MultipartState.END:  # e.g. the closing boundary is missing: the upload is incomplete
         raise UploadError(400, "Malformed upload: the multipart body is incomplete.")
     if not found:

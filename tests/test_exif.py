@@ -37,7 +37,8 @@ def test_xmp_digital_source_type(tmp_path):
 def test_png_text_chunks(tmp_path, compressed):
     meta = exif.extract(write(tmp_path, "sd.png", media.png({"parameters": media.SD_PARAMETERS}, compressed)))
     assert meta.text_chunks["parameters"].startswith("a cat astronaut")
-    assert any(f == "PNG text \u201cparameters\u201d" and "Steps: 30" in v for f, v in meta.tool_fields())
+    # Generator-setting keys are parsed with their own grammar, not treated as software-name fields.
+    assert all(f != "PNG text \u201cparameters\u201d" for f, _ in meta.tool_fields())
 
 
 def test_real_photoshop_fixture_xmp_tools():

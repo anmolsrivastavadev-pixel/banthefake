@@ -55,11 +55,12 @@ def test_truncated_jpeg_does_not_flip_global_pillow_flag(tmp_path):
     assert ImageFile.LOAD_TRUNCATED_IMAGES is False
 
 
-def test_truncated_png_pixel_data_still_analyzed(client, detector):
+def test_truncated_png_with_too_few_pixels_is_not_scored(client, detector):
     data = media.photo_png()
     idat = data.index(b"IDAT")
     body = scan(client, "t.png", data[: idat + 200])
-    assert body["model"] is not None, texts(body)
+    assert body["model"] is None
+    assert "less than 20%" in texts(body)
     assert ImageFile.LOAD_TRUNCATED_IMAGES is False
 
 
@@ -88,13 +89,11 @@ def test_png_text_reader_is_bounded(tmp_path):
     assert len(texts_["Comment"]) == exif.MAX_TEXT
 
 
-def test_png_over_decode_limit_gets_explicit_signal(client, detector, monkeypatch):
+def test_png_over_decode_limit_is_reduced(client, detector, monkeypatch):
     monkeypatch.setattr(exif, "MAX_DECODE_PIXELS", 10_000)
     body = scan(client, "big.png", media.photo_png())  # 256x192 = 49k pixels
-    assert not detector and body["model"] is None
-    msg = next(s["text"] for s in body["signals"] if COULD_NOT in s["text"])
-    assert "256×192" in msg
-    assert NO_METADATA not in texts(body)
+    assert detector and body["model"] is not None
+    assert detector[0][0].width * detector[0][0].height <= exif.MAX_DECODE_PIXELS
 
 
 def test_jpeg_over_decode_limit_is_downscaled(client, detector, monkeypatch):

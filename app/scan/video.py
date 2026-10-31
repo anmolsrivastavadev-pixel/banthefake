@@ -14,6 +14,7 @@ MAX_PIXELS = 8192 * 4320  # refuse to decode frames larger than 8K
 MAX_FRAME_SIDE = 1024  # sampled frames are downscaled to this long side
 MAX_DECODE_PER_SEEK = 240  # frames decoded after a seek before settling for the last one
 TIME_BUDGET_S = 20.0
+UNKNOWN_SAMPLE_INTERVAL_S = 5.0
 # Tags that name the encoding/creating software. Free-text tags (title, artist, comment, description,
 # copyright...) are not used: "Runway highlights" in a title says nothing about how the file was made.
 META_KEYS_TOOL = ("encoder", "software", "handler")
@@ -106,18 +107,35 @@ def _sample(container, stream, info: VideoInfo, n: int) -> None:
     stream.thread_type = "AUTO"
     deadline = time.monotonic() + TIME_BUDGET_S
     dur = info.duration_s or 0.0
+    has_stream_start = stream.start_time is not None and stream.time_base is not None
+    start = float(stream.start_time * stream.time_base) if has_stream_start else 0.0
+    if not has_stream_start and container.start_time is not None:
+        import av
+        start = float(container.start_time / av.time_base)
     big = (info.width or 0) * (info.height or 0) > 1920 * 1088
     cap = MAX_DECODE_PER_SEEK // 4 if big else MAX_DECODE_PER_SEEK
-    targets = [dur * (i + 0.5) / n for i in range(n)] if dur > 0 else [0.0]
+    if dur <= 0:
+        stream.codec_context.skip_frame = "NONREF"
+        last = -UNKNOWN_SAMPLE_INTERVAL_S
+        for frame in container.decode(stream):
+            if time.monotonic() > deadline or len(info.frames) >= n:
+                break
+            relative = max(0.0, float(frame.time or start) - start)
+            if relative + 0.02 < last + UNKNOWN_SAMPLE_INTERVAL_S:
+                continue
+            info.frames.append(_to_image(frame))
+            info.timestamps.append(round(relative, 3))
+            last = relative
+        return
+    targets = [dur * (i + 0.5) / n for i in range(n)]
     seen: set[int] = set()
     forward = None  # the single forward-decoding iterator, once seeking has been given up
     for t in targets:
         if time.monotonic() > deadline:
             break
         if forward is None:
-            offset = int(t / stream.time_base) if stream.time_base else 0
-            if stream.start_time is not None:
-                offset += stream.start_time
+            absolute = start + t
+            offset = int(absolute / stream.time_base) if stream.time_base else 0
             container.seek(offset, stream=stream, backward=True, any_frame=False)
             frames = container.decode(stream)
         else:
@@ -125,7 +143,7 @@ def _sample(container, stream, info: VideoInfo, n: int) -> None:
         picked = None
         for i, frame in enumerate(frames):
             picked = frame
-            if (frame.time is not None and frame.time >= t - 0.02) or time.monotonic() > deadline:
+            if (frame.time is not None and frame.time >= start + t - 0.02) or time.monotonic() > deadline:
                 break
             if forward is None and i + 1 >= cap:
                 log.info("keyframes too sparse to seek; sampling in one forward pass")
@@ -138,7 +156,7 @@ def _sample(container, stream, info: VideoInfo, n: int) -> None:
             continue
         seen.add(key)
         info.frames.append(_to_image(picked))
-        info.timestamps.append(round(float(picked.time or 0.0), 3))
+        info.timestamps.append(round(max(0.0, float(picked.time or start) - start), 3))
 
 
 def _to_image(frame) -> Image.Image:

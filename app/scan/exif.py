@@ -11,11 +11,10 @@ import re
 import struct
 import threading
 import zlib
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import ExifTags, Image, ImageFile, ImageOps
+from PIL import ExifTags, Image, ImageFile, ImageOps, ImageStat
 
 # Refuse to scan images above this many pixels (decompression-bomb guard). Pillow itself raises
 # DecompressionBombError above 2 * Image.MAX_IMAGE_PIXELS (~179 MP by default).
@@ -47,8 +46,10 @@ XMP_FIELDS = {
 }
 # PNG text keys written by AI generators (A1111/Forge "parameters", ComfyUI "prompt"/"workflow",
 # NovelAI and others "Software"). Other keys (Title, Description, Comment, Author...) are free text.
-PNG_TOOL_KEYS = {"parameters", "prompt", "workflow", "software"}
-XMP_DST_RE = re.compile(r"DigitalSourceType\s*(?:=\s*\"([^\"]*)\"|>([^<]*)<|[^>]*rdf:resource=\"([^\"]*)\")")
+XMP_DST_RE = re.compile(
+    r"(?:Iptc4xmpExt|photoshop):DigitalSourceType\s*"
+    r"(?:=\s*\"([^\"]*)\"|>([^<]*)<|[^>]*rdf:resource=\"([^\"]*)\")"
+)
 SKIP_INFO_KEYS = {"exif", "icc_profile", "xmp", "XML:com.adobe.xmp", "photoshop", "adobe", "jfif_unit"}
 
 
@@ -68,6 +69,7 @@ class DecodeFailed(Exception):
 class ModelInput:
     image: Image.Image
     notes: list[str] = field(default_factory=list)  # user-facing caveats, e.g. "the file is truncated"
+    low_colour: bool = False
 
 
 @dataclass
@@ -80,6 +82,7 @@ class ImageMeta:
     model: str = ""
     software: str = ""
     processing_software: str = ""
+    user_comment: str = ""
     datetime_original: str = ""
     camera_details: bool = False
     xmp: str = ""
@@ -100,7 +103,7 @@ class ImageMeta:
         values = [("EXIF Software", self.software), ("EXIF ProcessingSoftware", self.processing_software)]
         values += self.xmp_tools
         values += [("XMP DigitalSourceType", v) for v in self.digital_source_types]
-        values += [(self.text_field(k), v) for k, v in self.text_chunks.items() if k.lower() in PNG_TOOL_KEYS]
+        values += [(self.text_field(k), v) for k, v in self.text_chunks.items() if k.lower() == "software"]
         return [(f, v) for f, v in values if v]
 
     def text_field(self, key: str) -> str:
@@ -192,6 +195,7 @@ def _read_exif(im: Image.Image, meta: ImageMeta) -> None:
     meta.software = _clean(exif.get(T.Software))
     meta.processing_software = _clean(exif.get(T.ProcessingSoftware))
     sub = exif.get_ifd(ExifTags.IFD.Exif)
+    meta.user_comment = _clean(sub.get(T.UserComment))
     meta.datetime_original = _clean(sub.get(T.DateTimeOriginal))
     meta.camera_details = any(tag in sub for tag in CAMERA_DETAIL_TAGS)
 
@@ -207,39 +211,53 @@ def decode_for_model(path: str | Path, max_side: int = 2048) -> ModelInput:
     Raises ImageTooLarge (refuse the file) or DecodeFailed (the model cannot analyze it; give the reason).
     """
     try:
-        return ModelInput(_decode(path, max_side, tolerant=False))
+        image, low_colour = _decode(path, max_side, tolerant=False)
+        return ModelInput(image, low_colour=low_colour)
     except (ImageTooLarge, DecodeFailed):
         raise
     except Exception as exc:
         first = exc
     try:
-        img = _decode(path, max_side, tolerant=True)
+        img, low_colour = _decode(path, max_side, tolerant=True)
     except (ImageTooLarge, DecodeFailed):
         raise
     except Exception as exc:
         raise DecodeFailed(f"the image data could not be decoded ({type(first).__name__})") from exc
-    return ModelInput(img, ["the file is damaged or truncated; the detector checked the part that could be read"])
+    return ModelInput(img, ["the file is damaged or truncated; the detector checked the part that could be read"], low_colour)
 
 
-def _decode(path: str | Path, max_side: int, tolerant: bool) -> Image.Image:
+def _decode(path: str | Path, max_side: int, tolerant: bool) -> tuple[Image.Image, bool]:
     jpeg = _is_jpeg(path)
-    im = _open(path, strip_png_text=tolerant and _is_png(path), pad_jpeg=tolerant and jpeg)
-    with im:
-        check_size(im)
-        w, h = im.size
-        if im.format == "JPEG":
-            scale = _jpeg_scale(w, h, max_side)
-            if scale > 1:
-                im.draft("RGB", (w // scale, h // scale))
-        if im.size[0] * im.size[1] > MAX_DECODE_PIXELS:
-            raise DecodeFailed(
-                f"the image is {w}\u00d7{h} pixels, above the {MAX_DECODE_PIXELS // 1_000_000} MP the detector can decode"
-            )
-        im.seek(0)
-        with _allow_truncated() if tolerant and not jpeg else _nullcontext():
-            out = (ImageOps.exif_transpose(im) or im).convert("RGB")
+    # LOAD_TRUNCATED_IMAGES is process-global. Serialize every pixel load so tolerant and strict loads
+    # cannot observe one another's setting.
+    with _decode_lock:
+        old = ImageFile.LOAD_TRUNCATED_IMAGES
+        ImageFile.LOAD_TRUNCATED_IMAGES = tolerant and not jpeg
+        try:
+            im = _open(path, strip_png_text=tolerant and _is_png(path), pad_jpeg=tolerant and jpeg)
+            with im:
+                check_size(im)
+                w, h = im.size
+                source_low_colour = im.mode in {"1", "L", "LA", "P"}
+                if im.format == "JPEG":
+                    scale = _jpeg_scale(w, h, max_side)
+                    if scale > 1:
+                        im.draft("RGB", (w // scale, h // scale))
+                elif im.size[0] * im.size[1] > MAX_DECODE_PIXELS:
+                    factor = max(2, int((im.size[0] * im.size[1] / MAX_DECODE_PIXELS) ** 0.5 + 0.999))
+                    im = im.reduce(factor)
+                if im.size[0] * im.size[1] > MAX_DECODE_PIXELS:
+                    raise DecodeFailed(
+                        f"the image is {w}\u00d7{h} pixels, above the {MAX_DECODE_PIXELS // 1_000_000} MP the detector can decode"
+                    )
+                im.seek(0)
+                out = (ImageOps.exif_transpose(im) or im).convert("RGB")
+        finally:
+            ImageFile.LOAD_TRUNCATED_IMAGES = old
+    if tolerant and _decoded_fraction(out) < 0.2:
+        raise DecodeFailed("less than 20% of the image pixels could be decoded")
     out.thumbnail((max_side, max_side), Image.Resampling.BICUBIC)
-    return out
+    return out, source_low_colour or _low_colour(out)
 
 
 def _jpeg_scale(w: int, h: int, max_side: int) -> int:
@@ -291,25 +309,29 @@ class _EOIPadded:
         self._f.close()
 
 
-_truncated_lock = threading.Lock()
+_decode_lock = threading.Lock()
 
 
-@contextmanager
-def _allow_truncated():
-    """Last resort for truncated non-JPEG images: Pillow only offers a process-wide switch, so hold a lock
-    and restore it right after this decode. JPEGs use the per-file _EOIPadded wrapper instead."""
-    with _truncated_lock:
-        old = ImageFile.LOAD_TRUNCATED_IMAGES
-        ImageFile.LOAD_TRUNCATED_IMAGES = True
-        try:
-            yield
-        finally:
-            ImageFile.LOAD_TRUNCATED_IMAGES = old
+def _decoded_fraction(image: Image.Image) -> float:
+    """Estimate rows containing decoded pixels; truncated decoders pad the missing tail uniformly."""
+    if image.height <= 1:
+        return 1.0
+    good = 0
+    for y in range(image.height):
+        extrema = image.crop((0, y, image.width, y + 1)).getextrema()
+        if any(hi - lo > 2 for lo, hi in extrema):
+            good += 1
+    return good / image.height
 
 
-@contextmanager
-def _nullcontext():
-    yield
+def _low_colour(image: Image.Image) -> bool:
+    sample = image.copy()
+    sample.thumbnail((256, 256))
+    colours = sample.getcolors(maxcolors=257)
+    if colours is not None and len(colours) <= 256:
+        return True
+    saturation = ImageStat.Stat(sample.convert("HSV").getchannel("S")).mean[0]
+    return saturation < 12
 
 
 def _head(path: str | Path, n: int = 8) -> bytes:

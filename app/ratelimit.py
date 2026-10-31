@@ -38,6 +38,15 @@ class RateLimiter:
             hits = self._hits.get(key)
             return hits is None or sum(1 for t in hits if t > cutoff) < self.limit
 
+    def refund(self, key: str) -> None:
+        """Remove one reservation for `key`, when work did not complete successfully."""
+        with self._lock:
+            hits = self._hits.get(key)
+            if hits:
+                hits.pop()
+                if not hits:
+                    self._hits.pop(key, None)
+
     def _sweep(self, cutoff: float) -> None:
         stale = [k for k, hits in self._hits.items() if not hits or hits[-1] <= cutoff]
         for k in stale:

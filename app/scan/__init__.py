@@ -129,11 +129,12 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
     if cred is not None and not cred.readable:
         cred = c2pa_check.C2PAResult(present=True, readable=False) if markers.has_c2pa_hint(raw) else None
     tool_fields: list[tuple[str, str]] = []
-    if cred is not None and cred.readable and not cred.ai_generated:
+    if cred is not None and cred.readable and cred.valid and not cred.ai_generated:
         # an AI declaration is reported once, by the C2PA signal; otherwise check the named tools
         tool_fields.append(("C2PA claim generator", cred.generator))
         tool_fields += [("C2PA softwareAgent", a) for a in cred.software_agents]
     chunk_hits: list[Hit] = []
+    low_colour = False
 
     # --- format-specific metadata + pixels for the model ---------------------------------------
     frames = []
@@ -154,7 +155,13 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         tool_fields += meta.tool_fields()
         # generator settings stored in (possibly compressed) text chunks
         for key, value in meta.text_chunks.items():
-            chunk_hits += markers.scan_bytes(value.encode("utf-8", "replace"), meta.text_field(key))
+            chunk_hits += markers.scan_generator_metadata(
+                value.encode("utf-8", "replace"), meta.text_field(key), key
+            )
+        if meta.user_comment:
+            chunk_hits += markers.scan_generator_metadata(
+                meta.user_comment.encode("utf-8", "replace"), "EXIF UserComment", "usercomment"
+            )
         camera = meta.camera if (meta.make or meta.model) else ""
         camera_details = meta.camera_details
         has_metadata = meta.has_exif or bool(meta.xmp) or bool(meta.text_chunks)
@@ -164,6 +171,7 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
             try:
                 decoded = exif.decode_for_model(path)
                 frames = [decoded.image]
+                low_colour = decoded.low_colour
                 for note in decoded.notes:
                     out.add("info", f"Note: {note}.", 0.1)
             except exif.ImageTooLarge as exc:
@@ -197,9 +205,12 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
     if cred is not None:
         _c2pa_signals(out, cred)
     # most specific source first: a named metadata field beats a match somewhere in the raw bytes
-    out.hits([h for h in text_hits + chunk_hits + raw_hits if h.kind == "ai"])
+    metadata_hits = text_hits + chunk_hits
+    if cred is None or cred.valid:
+        metadata_hits += raw_hits
+    out.hits([h for h in metadata_hits if h.kind == "ai"])
     out.hits([h for h in text_hits if h.kind == "edit"])
-    if cred is not None and cred.readable and cred.edit_actions:
+    if cred is not None and cred.readable and cred.valid and cred.edit_actions:
         names = ", ".join(_action_name(a) for a in cred.edit_actions[:6])
         out.add("edit", f"Content credentials record edits: {names}.", 0.6)
 
@@ -207,7 +218,9 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         detail = " with exposure settings" if camera_details else ""
         out.add("camera", f"Camera data found ({camera}){detail}. Real cameras write this, but it can be copied or faked.", 0.4)
 
-    model_info, model_failure = _run_model(out, frames, kind, timestamps, duration)
+    if low_colour:
+        out.add("info", "The AI detector is unreliable on black-and-white or low-colour images.", 0.1)
+    model_info, model_failure = _run_model(out, frames, kind, timestamps, duration, low_colour)
     detector_failed = model.enabled() and model_info is None
     if detector_failed:
         # Never skip the model silently: an unanalyzed file must not look like a clean one.
@@ -217,7 +230,7 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
     if not out.signals and kind == "image" and not has_metadata and not detector_failed:
         out.add("info", "No metadata at all. Often a sign it was stripped by a social app, or on purpose.", 0.1)
 
-    verdict, title, detail = _verdict(out, cred, model_info)
+    verdict, title, detail = _verdict(out, cred, model_info, detector_failed, low_colour)
     return {
         "verdict": verdict,
         "verdict_title": title,
@@ -237,6 +250,10 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
     if not cred.readable:
         out.add("c2pa", "The file seems to contain content credentials (C2PA), but they could not be read.", 0.3)
         return
+    if not cred.valid:
+        problems = ", ".join(cred.failures[:3]) or "validation failed"
+        out.add("info", f"Content credentials present but failed validation ({problems}) — ignored.", 0.2)
+        return
     by = f" by “{cred.generator}”" if cred.generator else ""
     if cred.valid and cred.trusted:
         sig = f"signed by {cred.issuer or 'a trusted signer'}, and the signature checks out"
@@ -245,10 +262,7 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
             f"signature is intact, but the signer ({cred.issuer or 'unknown'}) is not on our trust list, "
             "so who made it cannot be confirmed"
         )
-    else:
-        problems = ", ".join(cred.failures[:3]) or "validation failed"
-        sig = f"but they do NOT validate ({problems}); the file may have been changed after signing"
-    out.add("c2pa", f"Content credentials (C2PA) found, made{by}; {sig}.", 0.7 if cred.valid else 0.5)
+    out.add("c2pa", f"Content credentials (C2PA) found, made{by}; {sig}.", 0.7)
     if cred.ai_generated:
         trained = any(t.rsplit("/", 1)[-1] == "trainedAlgorithmicMedia" for t in cred.source_types)
         key = "iptc_trained" if trained else "iptc_composite"
@@ -263,7 +277,8 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
 
 
 def _run_model(
-    out: _Collector, frames: list, kind: str, timestamps: list[float] | None = None, duration: float | None = None
+    out: _Collector, frames: list, kind: str, timestamps: list[float] | None = None,
+    duration: float | None = None, low_colour: bool = False,
 ) -> tuple[ModelInfo | None, str | None]:
     """Run the detector. Returns (info, None), or (None, reason) when it ran but gave no result."""
     if not frames:
@@ -306,10 +321,12 @@ def _run_model(
         out.add("model", f"Our detector model rates this {pct}% likely to be AI-generated{frames_note}. Detectors can be wrong.", p)
     elif p >= model.POSSIBLE:
         out.add("model", f"Our detector model sees possible signs of AI generation ({pct}%){frames_note}. Not conclusive.", p)
-    else:
+    elif not low_colour:
         out.add("model", f"Our detector model found no strong AI signal ({pct}%){frames_note}. Detectors miss many fakes, so this does not mean it is real.", p)
     if partial:
         out.add("info", partial, 0.2)
+    if kind == "video" and duration is None:
+        out.add("info", "The video duration is unknown, so detector coverage may be partial.", 0.2)
     return info, None
 
 
@@ -318,10 +335,12 @@ def _pct(p: float) -> int:
     return max(1, min(99, round(p * 100)))
 
 
-def _verdict(out: _Collector, cred, model_info: ModelInfo | None) -> tuple[Verdict, str, str]:
+def _verdict(
+    out: _Collector, cred, model_info: ModelInfo | None, detector_failed: bool = False, low_colour: bool = False
+) -> tuple[Verdict, str, str]:
     prob = model_info["ai_probability"] if model_info else None
     if out.has("ai"):
-        declared = cred is not None and cred.readable and cred.ai_generated
+        declared = cred is not None and cred.readable and cred.valid and cred.ai_generated
         detail = (
             "The file's content credentials declare AI involvement." if declared
             else "The file carries markers left by AI generation tools."
@@ -334,6 +353,8 @@ def _verdict(out: _Collector, cred, model_info: ModelInfo | None) -> tuple[Verdi
             f"No AI metadata, but our detector model rates it {_pct(prob)}% likely AI-made. "
             f"Detectors make mistakes, so check where the file came from. {NO_PROOF}",
         )
+    if detector_failed:
+        return "unknown", "Could not fully analyze", f"The AI detector could not analyze this file. {NO_PROOF}"
     if out.has("edit"):
         return (
             "edited",
@@ -345,6 +366,11 @@ def _verdict(out: _Collector, cred, model_info: ModelInfo | None) -> tuple[Verdi
             "unknown",
             "Possible signs of AI generation",
             f"Our detector model sees some signs of AI ({_pct(prob)}%), but not enough to say so. {NO_PROOF}",
+        )
+    if low_colour:
+        return (
+            "unknown", "Detector unreliable for this image",
+            f"Black-and-white and low-colour images are outside the detector's reliable range. {NO_PROOF}",
         )
     if out.has("camera"):
         return (

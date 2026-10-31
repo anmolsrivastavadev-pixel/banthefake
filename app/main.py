@@ -205,24 +205,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/petition", status_code=201)
     async def sign(request: Request):
         ip = client_ip(request)
-        if not attempt_limiter.hit(ip) or not sign_limiter.allowed(ip):
+        if not attempt_limiter.hit(ip) or not sign_limiter.hit(ip):
             return error(429, "Too many attempts. Please try again later.")
         try:
             payload = await read_json(request)
         except BodyError as exc:
+            sign_limiter.refund(ip)
             return error(exc.status, exc.message)
         if not isinstance(payload, dict):
+            sign_limiter.refund(ip)
             return error(400, "Invalid request body.")
         if payload.get("website"):
-            sign_limiter.hit(ip)  # looks like a success to the bot, so it counts like one
             return JSONResponse({"ok": True}, status_code=201)
         try:
             sig = validate(payload)
         except ValidationError as exc:
+            sign_limiter.refund(ip)
             return error(422, str(exc))
-        if not await run_in_threadpool(store.add, sig):
+        try:
+            added = await run_in_threadpool(store.add, sig)
+        except Exception:
+            sign_limiter.refund(ip)
+            raise
+        if not added:
+            sign_limiter.refund(ip)
             return error(409, "already_signed")
-        sign_limiter.hit(ip)
         return JSONResponse({"ok": True}, status_code=201)
 
     @app.get("/api/petition/count")

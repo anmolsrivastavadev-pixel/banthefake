@@ -9,21 +9,14 @@ def keys(hits):
     return {h.key for h in hits}
 
 
-@pytest.mark.parametrize(
-    ("blob", "key"),
-    [
-        (b"..http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia..", "iptc_trained"),
-        (b"..digitalsourcetype/compositeWithTrainedAlgorithmicMedia..", "iptc_composite"),
-        (b"\0parameters\0cat\nSteps: 20, Sampler: Euler a, CFG scale: 7", "sd_params"),
-        (b'{"3": {"inputs": {"seed": 1}, "class_type": "KSampler"}}', "comfyui"),
-    ],
-)
-def test_raw_markers_hit(blob, key):
-    hits = markers.scan_bytes(os.urandom(512) + blob + os.urandom(512))
-    assert key in keys(hits)
-    h = next(h for h in hits if h.key == key)
-    assert h.field == "file bytes" and 0 < len(h.snippet) <= markers.SNIPPET_MAX
-    assert h.field in h.text and h.snippet in h.text
+@pytest.mark.parametrize("blob", [
+    b"..http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia..",
+    b"..digitalsourcetype/compositeWithTrainedAlgorithmicMedia..",
+    b"\0parameters\0cat\nSteps: 20, Sampler: Euler a, CFG scale: 7",
+    b'{"3": {"inputs": {"seed": 1}, "class_type": "KSampler"}}',
+])
+def test_unstructured_raw_markers_are_ignored(blob):
+    assert markers.scan_bytes(os.urandom(512) + blob + os.urandom(512)) == []
 
 
 @pytest.mark.parametrize(
@@ -87,9 +80,7 @@ def test_read_window_head_and_tail_only(tmp_path):
         f.write(b'\0{"inputs": {}, "class_type": "KSampler"}\0')
         f.write(b"\0" * (markers.RAW_WINDOW * 2))
         f.write(b"\0digitalsourcetype/compositeWithTrainedAlgorithmicMedia\0")
-    found = keys(markers.scan_raw(p))
-    assert "sd_params" in found and "iptc_composite" in found
-    assert "comfyui" not in found  # the middle of large files is not scanned
+    assert markers.scan_raw(p) == []
 
 
 def test_c2pa_hint():
