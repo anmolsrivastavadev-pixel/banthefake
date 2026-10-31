@@ -11,7 +11,7 @@ Measured scores at the pinned revisions (H = haywoodsloan, C = CommunityForensic
 import pytest
 from PIL import Image
 
-from app.scan import model
+from app.scan import model, video
 from tests.conftest import FIXTURES
 
 pytestmark = pytest.mark.ml
@@ -122,7 +122,12 @@ def test_e2e_marker_beats_low_model_score(client):
     assert body["verdict"] == "ai" and body["model"] is not None
 
 
-def test_e2e_video_frames(client):
+def test_e2e_video_frames(client, monkeypatch):
+    # This test verifies eight-frame model scoring.  Keep the sampler's load-shedding deadline from
+    # turning it into a host-speed test: isolation itself and partial video coverage are exercised
+    # separately.  In-process parsing lets the test-only budget apply without changing worker code.
+    monkeypatch.setenv("BTF_SCAN_ISOLATION", "off")
+    monkeypatch.setattr(video, "TIME_BUDGET_S", 120.0)
     body = scan(client, "test_clip.mp4")
     m = body["model"]
     assert m["frames_checked"] == 8 and len(m["frame_probabilities"]) == 8

@@ -381,7 +381,10 @@ def test_replacement_spawn_failure_is_retried_on_next_acquire(tmp_path, monkeypa
     with pytest.raises(isolate.ScanTimeout):
         isolate.parse(path, path.name, "image/png", False)
     monkeypatch.delenv("BTF_SCAN_TEST_HOOK")
-    monkeypatch.setenv("BTF_SCAN_TIMEOUT_S", "2")
+    # Worker startup can take several seconds on a loaded host.  This operation verifies that the
+    # next acquire retries the failed replacement; its wall-clock duration is not part of the
+    # behaviour under test, so retain the normal production timeout as a generous backstop.
+    monkeypatch.setenv("BTF_SCAN_TIMEOUT_S", "30")
     result = isolate.parse(path, path.name, "image/png", False)
     assert result["kind"] == "image" and len(pool.pids()) == 1 and calls >= 2
 
