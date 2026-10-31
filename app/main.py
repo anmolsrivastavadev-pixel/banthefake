@@ -1,0 +1,182 @@
+import hmac
+import json
+import logging
+import os
+import tempfile
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app import scan
+from app.config import Settings
+from app.petition import PetitionStore, ValidationError, validate
+from app.ratelimit import RateLimiter
+from app.sniff import pillow_can_open, sniff
+from app.upload import UploadError, receive_file
+
+log = logging.getLogger("banthefake")
+
+CSP = "; ".join(
+    [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' https://fonts.googleapis.com",
+        "font-src https://fonts.gstatic.com",
+        "img-src 'self' blob: data:",
+        "media-src 'self' blob:",
+        "connect-src 'self'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    ]
+)
+SECURITY_HEADERS = {
+    "Content-Security-Policy": CSP,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "X-Frame-Options": "DENY",
+}
+
+
+def error(status: int, message: str, headers: dict[str, str] | None = None) -> JSONResponse:
+    return JSONResponse({"error": message}, status_code=status, headers=headers)
+
+
+def client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or Settings.from_env()
+    store = PetitionStore(settings.db_path)
+    sign_limiter = RateLimiter(settings.sign_rate, 3600)
+    scan_limiter = RateLimiter(settings.scan_rate, 60)
+
+    app = FastAPI(title="BanTheFake", docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.settings = settings
+    app.state.store = store
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        response = await call_next(request)
+        for key, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(key, value)
+        return response
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        return error(exc.status_code, str(exc.detail), getattr(exc, "headers", None))
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        return error(422, "Invalid request.")
+
+    def check_admin(request: Request) -> JSONResponse | None:
+        if not settings.admin_token:
+            return error(404, "Not Found")
+        auth = request.headers.get("authorization", "")
+        scheme, _, token = auth.partition(" ")
+        if scheme.lower() != "bearer" or not hmac.compare_digest(
+            token.strip().encode(), settings.admin_token.encode()
+        ):
+            return error(401, "unauthorized", {"WWW-Authenticate": "Bearer"})
+        return None
+
+    async def read_json(request: Request) -> object:
+        try:
+            return json.loads(await request.body())
+        except (ValueError, UnicodeDecodeError):
+            return None
+
+    @app.get("/api/health")
+    async def health() -> dict:
+        caps = scan.capabilities()
+        return {"ok": True, "model": caps["model"], "c2pa": caps["c2pa"]}
+
+    @app.post("/api/petition", status_code=201)
+    async def sign(request: Request):
+        if not sign_limiter.hit(client_ip(request)):
+            return error(429, "Too many attempts. Please try again later.")
+        payload = await read_json(request)
+        if not isinstance(payload, dict):
+            return error(400, "Invalid request body.")
+        if payload.get("website"):
+            return JSONResponse({"ok": True}, status_code=201)
+        try:
+            sig = validate(payload)
+        except ValidationError as exc:
+            return error(422, str(exc))
+        if not await run_in_threadpool(store.add, sig):
+            return error(409, "already_signed")
+        return JSONResponse({"ok": True}, status_code=201)
+
+    @app.get("/api/petition/count")
+    async def count() -> dict:
+        return {"count": await run_in_threadpool(store.count), "goal": settings.petition_goal}
+
+    @app.get("/api/petition/export.csv")
+    async def export(request: Request):
+        if denied := check_admin(request):
+            return denied
+        body = await run_in_threadpool(store.export_csv)
+        return Response(
+            body,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": 'attachment; filename="signatures.csv"',
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @app.delete("/api/petition")
+    async def erase(request: Request):
+        if denied := check_admin(request):
+            return denied
+        payload = await read_json(request)
+        email = payload.get("email") if isinstance(payload, dict) else None
+        if not isinstance(email, str) or not email.strip():
+            return error(422, "email is required.")
+        if not await run_in_threadpool(store.delete, email):
+            return error(404, "not_found")
+        return {"deleted": True}
+
+    @app.post("/api/scan")
+    async def scan_upload(request: Request):
+        if not scan_limiter.hit(client_ip(request)):
+            return error(429, "Too many scans. Please wait a minute and try again.")
+        fd, tmp_name = tempfile.mkstemp(prefix="btf-")
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "wb") as dest:
+                info = await receive_file(request, dest, "file", settings.max_upload_bytes)
+            if info.size == 0:
+                return error(400, "The file is empty.")
+            with tmp_path.open("rb") as f:
+                sniffed = sniff(f.read(64))
+            if sniffed is None:
+                return error(415, "Unsupported file type. Upload a JPG, PNG, WEBP, GIF, MP4, MOV or WEBM.")
+            _, mime = sniffed
+            if mime in ("image/heic", "image/heif") and not await run_in_threadpool(pillow_can_open, tmp_path):
+                return error(415, "HEIC/HEIF images are not supported on this server.")
+            filename = os.path.basename(info.filename.replace("\\", "/"))[:255]
+            report = await run_in_threadpool(scan.scan_file, tmp_path, filename, mime)
+            return report
+        except UploadError as exc:
+            return error(exc.status, exc.message)
+        except Exception:
+            log.exception("scan failed")
+            return error(500, "Scan failed.")
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="static")
+    return app
+
+
+app = create_app()

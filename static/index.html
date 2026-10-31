@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BanTheFake: Stop harmful deepfakes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/styles.css" />
+<script src="/app.js" defer></script>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a href="#" class="logo"><span class="logo-mark"></span>BanTheFake</a>
+    <ul class="nav-links">
+      <li><a href="#scan">Scan media</a></li>
+      <li><a href="#report">Report</a></li>
+      <li><a href="#demands">Our demands</a></li>
+      <li><a href="#act">Take action</a></li>
+      <li><a href="#faq">FAQ</a></li>
+    </ul>
+    <a href="#act" class="btn btn-red">Sign the petition</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">A campaign against harmful deepfakes</div>
+    <h1>Your face. Your voice. <span class="accent">Your consent.</span></h1>
+    <p class="sub">Deepfakes are used to harass, scam, and lie, and the people targeted usually never agreed to any of it. Check suspicious media, get fakes taken down, and push lawmakers and platforms to act.</p>
+    <div class="ctas">
+      <a href="#scan" class="btn btn-red">Scan a file →</a>
+      <a href="#report" class="btn btn-ghost">I've been deepfaked</a>
+    </div>
+    <div class="stats">
+      <div><div class="n">Seconds</div><div class="l">to clone a voice from a short clip</div></div>
+      <div><div class="n">1 photo</div><div class="l">can be enough to make a fake image of someone</div></div>
+      <div><div class="n">0</div><div class="l">consent asked of the people in most harmful deepfakes</div></div>
+    </div>
+  </div>
+</header>
+
+<section id="problem">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">The problem</div>
+      <h2>Fake media causes real harm</h2>
+      <p>We're not against AI. We're against using someone's likeness without their consent to hurt, deceive, or exploit them.</p>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="ico">⚠</div><h3>Non-consensual imagery</h3><p>Most harmful deepfakes are sexual images of real people, often women and minors, made and shared without consent.</p></div>
+      <div class="card"><div class="ico">☏</div><h3>Voice-clone scams</h3><p>Scammers clone a relative's voice and call asking for money in a fake emergency. Their targets are often older people.</p></div>
+      <div class="card"><div class="ico">⚑</div><h3>Political lies</h3><p>Fake videos and robocalls of candidates spread faster than fact-checks can catch them, especially just before elections.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="scan">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Free tool · files deleted right after scanning</div>
+      <h2>Scan an image or video</h2>
+      <p>Look for AI-generation markers, content credentials, camera data, and signs of editing. Your file is checked on our server and deleted as soon as the scan finishes. We never store or log it.</p>
+    </div>
+    <div class="scanner">
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="image/*,video/*" />
+        <div id="dropInner">
+          <div class="big">Drop a file here</div>
+          <div class="muted">or click to choose: JPG, PNG, WEBP, GIF, MP4, MOV, WEBM</div>
+        </div>
+      </label>
+      <div class="panel" id="resultPanel">
+        <div class="verdict" id="verdict">
+          <span class="dot"></span>
+          <div><b>Waiting for a file</b><span class="muted">Results will appear here.</span></div>
+        </div>
+        <ul class="signals" id="signals"></ul>
+        <div class="details" id="details"></div>
+        <div class="ela-wrap" id="elaWrap">
+          <canvas id="ela"></canvas>
+          <p><b>Error level analysis:</b> we re-save the image and highlight what changed. Areas that glow much brighter or darker than the rest may have been pasted in or edited. Treat this as a clue, not proof.</p>
+        </div>
+        <p class="disclaimer">No tool can prove a file is real. Metadata can be stripped or faked, and the best deepfakes leave no obvious traces. Use these results as one clue alongside where the file came from and who shared it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="report">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">If it happened to you</div>
+      <h2>Get it taken down</h2>
+      <p>It's not your fault. Save evidence first (screenshots, links, usernames, dates), then use these services.</p>
+    </div>
+    <div class="report">
+      <a href="https://stopncii.org/" target="_blank" rel="noopener"><h4>StopNCII.org <span>↗</span></h4><p>Adults: create a digital fingerprint of intimate images on your own device so partner platforms can block them. The images themselves are never uploaded.</p></a>
+      <a href="https://takeitdown.ncmec.org/" target="_blank" rel="noopener"><h4>Take It Down (NCMEC) <span>↗</span></h4><p>For images of anyone under 18, including AI-generated ones. Free and anonymous.</p></a>
+      <a href="https://www.ic3.gov/" target="_blank" rel="noopener"><h4>FBI IC3 (US) <span>↗</span></h4><p>Report voice-clone scams, extortion, and fraud that used fake media.</p></a>
+      <a href="https://cybercivilrights.org/ccri-crisis-helpline/" target="_blank" rel="noopener"><h4>CCRI Crisis Helpline <span>↗</span></h4><p>Free, confidential support for victims of image-based abuse.</p></a>
+    </div>
+  </div>
+</section>
+
+<section id="demands">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">What we're asking for</div>
+      <h2>Our demands</h2>
+    </div>
+    <div class="demands">
+      <div class="demand"><div><h3>Ban non-consensual deepfakes</h3><p>Make it illegal to create or share sexual or defamatory deepfakes of real people without their consent, and give victims the right to sue.</p></div></div>
+      <div class="demand"><div><h3>Fast mandatory takedowns</h3><p>Require platforms to remove reported non-consensual deepfakes within 48 hours and keep them from being re-uploaded.</p></div></div>
+      <div class="demand"><div><h3>Label all synthetic media</h3><p>Require AI tools to attach content credentials and watermarks, and require platforms to show them.</p></div></div>
+      <div class="demand"><div><h3>Hold the tools accountable</h3><p>Ban apps built to "undress" people or clone voices without consent, and remove them from app stores.</p></div></div>
+      <div class="demand"><div><h3>Protect elections</h3><p>Ban deceptive deepfakes of candidates in the run-up to an election.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section id="act">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Take action</div>
+      <h2>Add your name. Write your representative.</h2>
+    </div>
+    <div class="act">
+      <div class="panel">
+        <h3>Sign the petition</h3>
+        <p class="muted">Tell lawmakers and platforms to stop harmful deepfakes now.</p>
+        <div class="progress"><i id="bar"></i></div>
+        <div class="count"><b id="count">0</b> of <span id="goal">10,000</span> signatures</div>
+        <form class="stack" id="petition">
+          <input name="name" placeholder="Full name" maxlength="100" required />
+          <input name="email" type="email" placeholder="Email" maxlength="254" required />
+          <input name="location" placeholder="City / country" maxlength="100" />
+          <div class="hp" aria-hidden="true"><label>Website <input name="website" tabindex="-1" autocomplete="off" /></label></div>
+          <label class="consent"><input type="checkbox" name="consent" required /><span>I agree to BanTheFake storing my name, email and location to count my signature. We never share your email, and you can ask us to delete your signature at any time.</span></label>
+          <button class="btn btn-red" type="submit">Sign now</button>
+          <div class="thanks" id="thanks"></div>
+        </form>
+      </div>
+      <div class="panel">
+        <h3>Letter generator</h3>
+        <p class="muted">Fill in a few details and copy a ready-to-send letter.</p>
+        <form class="stack" id="letterForm">
+          <div class="field">Who are you writing to?
+            <select id="recipient">
+              <option value="rep">My elected representative</option>
+              <option value="platform">A social media platform</option>
+              <option value="school">My school / university</option>
+            </select>
+          </div>
+          <input id="lname" placeholder="Your name" />
+          <input id="lplace" placeholder="Your town / district" />
+          <textarea id="letter" readonly></textarea>
+          <button class="btn btn-ghost" type="button" id="copy">Copy letter</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <div class="sec-head"><div class="eyebrow">FAQ</div><h2>Questions</h2></div>
+    <div class="faq">
+      <details><summary>Are you trying to ban all AI?</summary><p>No. Face-swaps in films, satire that's clearly labeled, and accessibility uses like restoring a lost voice are fine. We oppose deepfakes made without consent that are used to harm or deceive.</p></details>
+      <details><summary>Can your scanner tell me for sure if something is fake?</summary><p>No, and no tool can. It reads hidden markers that many AI tools leave behind (like C2PA content credentials and generator settings) and flags signs of editing. If nothing is found, that doesn't mean the file is real.</p></details>
+      <details><summary>Do you keep my files?</summary><p>No. The file is sent to our server only so it can be scanned, held in a temporary file during the scan, and deleted straight after. We never store, log, or share it. The error level analysis heatmap is made in your browser.</p></details>
+      <details><summary>Isn't this already illegal?</summary><p>In some places, partly. The US TAKE IT DOWN Act (2025) targets non-consensual intimate images, including AI-generated ones, and the EU AI Act requires deepfakes to be labeled. Coverage still has big gaps, especially for voice clones, scams, and election content.</p></details>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <a href="#" class="logo"><span class="logo-mark"></span>BanTheFake</a>
+    <span>If you are in immediate danger, contact local emergency services.</span>
+  </div>
+</footer>
+
+</body>
+</html>

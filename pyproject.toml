@@ -1,0 +1,21 @@
+[project]
+name = "banthefake"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "defusedxml>=0.7.1",
+    "fastapi>=0.162.0",
+    "pillow>=13.0.0",
+    "python-multipart>=0.0.32",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "httpx2>=2.16.0",
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
