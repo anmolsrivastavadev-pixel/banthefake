@@ -1,18 +1,33 @@
-"""Image metadata: EXIF (camera make/model, software, dates), XMP and PNG/GIF text chunks."""
+"""Image metadata: EXIF (camera make/model, software, dates), XMP and PNG/GIF text chunks.
 
+Also decodes images for the detector model, tolerating damaged files: truncated JPEGs, PNG text chunks
+that Pillow refuses (e.g. a zTXt that inflates past its limit) and images above the decode limit
+(JPEGs are decoded at reduced scale instead).
+"""
+
+import io
 import os
 import re
+import struct
+import threading
+import zlib
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import ExifTags, Image, ImageOps
+from PIL import ExifTags, Image, ImageFile, ImageOps
 
 # Refuse to scan images above this many pixels (decompression-bomb guard). Pillow itself raises
 # DecompressionBombError above 2 * Image.MAX_IMAGE_PIXELS (~179 MP by default).
 MAX_PIXELS = int(os.environ.get("BTF_MAX_IMAGE_PIXELS") or 120_000_000)
-# Non-JPEG images above this are not decoded for the model (JPEG uses draft-mode downscaling instead).
-MAX_DECODE_PIXELS = 50_000_000
+# Never decode more than this many pixels at full size for the model. JPEGs above it are decoded at
+# 1/2, 1/4 or 1/8 scale (libjpeg draft mode); other formats above it are not analyzed by the model.
+MAX_DECODE_PIXELS = int(os.environ.get("BTF_MAX_DECODE_PIXELS") or 25_000_000)
 MAX_TEXT = 64 * 1024  # cap per metadata text value
+MAX_PNG_TEXT_CHUNKS = 2000  # text chunks read per PNG
+MAX_PNG_TEXT_TOTAL = 4 * 1024 * 1024  # total decoded PNG text kept
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+PNG_TEXT_TYPES = (b"tEXt", b"zTXt", b"iTXt")
 
 T = ExifTags.Base
 CAMERA_DETAIL_TAGS = (T.ExposureTime, T.FNumber, T.ISOSpeedRatings, T.FocalLength, T.LensModel)
@@ -39,6 +54,20 @@ SKIP_INFO_KEYS = {"exif", "icc_profile", "xmp", "XML:com.adobe.xmp", "photoshop"
 
 class ImageTooLarge(Exception):
     pass
+
+
+class DecodeFailed(Exception):
+    """The image could not be decoded for the model; `reason` is short and user-facing."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@dataclass
+class ModelInput:
+    image: Image.Image
+    notes: list[str] = field(default_factory=list)  # user-facing caveats, e.g. "the file is truncated"
 
 
 @dataclass
@@ -104,13 +133,21 @@ def check_size(im: Image.Image) -> None:
 def extract(path: str | Path) -> ImageMeta:
     """Read metadata without decoding pixels. Raises ImageTooLarge for oversized images."""
     meta = ImageMeta()
+    png = _is_png(path)
     try:
-        im = Image.open(path)
-    except Image.DecompressionBombError as exc:
-        raise ImageTooLarge(str(exc)) from exc
-    except Exception as exc:  # corrupt or unsupported: report, let other checks still run
-        meta.error = type(exc).__name__
-        return meta
+        im = _open(path, strip_png_text=False)
+    except ImageTooLarge:
+        raise
+    except Exception as exc:
+        try:  # e.g. a PNG text chunk Pillow refuses: read the image without its text chunks
+            im = _open(path, strip_png_text=True) if png else None
+        except ImageTooLarge:
+            raise
+        except Exception:
+            im = None
+        if im is None:  # corrupt or unsupported: report, let other checks still run
+            meta.error = type(exc).__name__
+            return meta
     with im:
         meta.format = im.format
         meta.width, meta.height = im.size
@@ -120,6 +157,21 @@ def extract(path: str | Path) -> ImageMeta:
         except Exception:  # malformed EXIF must not break the scan
             pass
         meta.xmp = _xmp_text(im)
+        if png:
+            # Our own bounded reader: also sees text after the image data, and oversized zTXt/iTXt.
+            texts = _png_text_chunks(path)
+            if not meta.xmp and (xmp := texts.pop("XML:com.adobe.xmp", "")):
+                meta.xmp = _clean(xmp)
+            texts.pop("XML:com.adobe.xmp", None)
+            meta.text_chunks.update({k[:64]: _clean(v) for k, v in texts.items() if _clean(v)})
+        else:
+            for key, value in im.info.items():
+                if key in SKIP_INFO_KEYS or not isinstance(key, str):
+                    continue
+                if isinstance(value, (str, bytes)) and (text := _clean(value)):
+                    if isinstance(value, bytes) and key not in ("comment", "Comment"):
+                        continue
+                    meta.text_chunks[key[:64]] = text
         if meta.xmp:
             meta.xmp_tools = [
                 (XMP_FIELDS[tag], _clean(a or b)) for tag, a, b in XMP_TOOL_RE.findall(meta.xmp) if (a or b).strip()
@@ -127,13 +179,6 @@ def extract(path: str | Path) -> ImageMeta:
             meta.digital_source_types = [
                 _clean(next(g for g in groups if g)) for groups in XMP_DST_RE.findall(meta.xmp) if any(groups)
             ][:10]
-        for key, value in im.info.items():
-            if key in SKIP_INFO_KEYS or not isinstance(key, str):
-                continue
-            if isinstance(value, (str, bytes)) and (text := _clean(value)):
-                if isinstance(value, bytes) and key not in ("comment", "Comment"):
-                    continue
-                meta.text_chunks[key[:64]] = text
     return meta
 
 
@@ -151,19 +196,203 @@ def _read_exif(im: Image.Image, meta: ImageMeta) -> None:
     meta.camera_details = any(tag in sub for tag in CAMERA_DETAIL_TAGS)
 
 
-def load_for_model(path: str | Path, max_side: int = 2048) -> Image.Image | None:
-    """Decode the image (first frame) as RGB, downscaled so the long side is at most `max_side`."""
+def load_for_model(path: str | Path, max_side: int = 2048) -> Image.Image:
+    """Decode the image (first frame) as RGB, long side at most `max_side`. Raises DecodeFailed."""
+    return decode_for_model(path, max_side).image
+
+
+def decode_for_model(path: str | Path, max_side: int = 2048) -> ModelInput:
+    """Decode the image for the detector, retrying damaged files in tolerant mode.
+
+    Raises ImageTooLarge (refuse the file) or DecodeFailed (the model cannot analyze it; give the reason).
+    """
     try:
-        im = Image.open(path)
-    except Image.DecompressionBombError as exc:
-        raise ImageTooLarge(str(exc)) from exc
+        return ModelInput(_decode(path, max_side, tolerant=False))
+    except (ImageTooLarge, DecodeFailed):
+        raise
+    except Exception as exc:
+        first = exc
+    try:
+        img = _decode(path, max_side, tolerant=True)
+    except (ImageTooLarge, DecodeFailed):
+        raise
+    except Exception as exc:
+        raise DecodeFailed(f"the image data could not be decoded ({type(first).__name__})") from exc
+    return ModelInput(img, ["the file is damaged or truncated; the detector checked the part that could be read"])
+
+
+def _decode(path: str | Path, max_side: int, tolerant: bool) -> Image.Image:
+    jpeg = _is_jpeg(path)
+    im = _open(path, strip_png_text=tolerant and _is_png(path), pad_jpeg=tolerant and jpeg)
     with im:
         check_size(im)
+        w, h = im.size
         if im.format == "JPEG":
-            im.draft("RGB", (max_side, max_side))
-        elif im.size[0] * im.size[1] > MAX_DECODE_PIXELS:
-            return None
+            scale = _jpeg_scale(w, h, max_side)
+            if scale > 1:
+                im.draft("RGB", (w // scale, h // scale))
+        if im.size[0] * im.size[1] > MAX_DECODE_PIXELS:
+            raise DecodeFailed(
+                f"the image is {w}\u00d7{h} pixels, above the {MAX_DECODE_PIXELS // 1_000_000} MP the detector can decode"
+            )
         im.seek(0)
-        out = (ImageOps.exif_transpose(im) or im).convert("RGB")
+        with _allow_truncated() if tolerant and not jpeg else _nullcontext():
+            out = (ImageOps.exif_transpose(im) or im).convert("RGB")
     out.thumbnail((max_side, max_side), Image.Resampling.BICUBIC)
     return out
+
+
+def _jpeg_scale(w: int, h: int, max_side: int) -> int:
+    """libjpeg scale (1, 2, 4 or 8): as small as possible, keeping the long side >= max_side, and
+    always small enough to stay under MAX_DECODE_PIXELS."""
+    scale = 1
+    while scale < 8 and max(w, h) // (scale * 2) >= max_side:
+        scale *= 2
+    while scale < 8 and -(-w // scale) * -(-h // scale) > MAX_DECODE_PIXELS:
+        scale *= 2
+    return scale
+
+
+def _open(path: str | Path, strip_png_text: bool = False, pad_jpeg: bool = False) -> Image.Image:
+    try:
+        if strip_png_text:
+            return Image.open(io.BytesIO(_png_without_text(path)))
+        if pad_jpeg:
+            return Image.open(_EOIPadded(open(path, "rb")))
+        return Image.open(path)
+    except Image.DecompressionBombError as exc:
+        raise ImageTooLarge(str(exc)) from exc
+
+
+class _EOIPadded:
+    """Read-only file wrapper that returns a JPEG end-of-image marker once at EOF, so libjpeg can finish
+    a truncated file (the rest of the image is filled in). Scoped to one file, unlike Pillow's global
+    ImageFile.LOAD_TRUNCATED_IMAGES."""
+
+    def __init__(self, f) -> None:
+        self._f = f
+        self._padded = False
+
+    def read(self, n: int = -1) -> bytes:
+        data = self._f.read(n)
+        if not data and n != 0 and not self._padded:
+            self._padded = True
+            return b"\xff\xd9"
+        return data
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        self._padded = False
+        return self._f.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self._f.tell()
+
+    def close(self) -> None:
+        self._f.close()
+
+
+_truncated_lock = threading.Lock()
+
+
+@contextmanager
+def _allow_truncated():
+    """Last resort for truncated non-JPEG images: Pillow only offers a process-wide switch, so hold a lock
+    and restore it right after this decode. JPEGs use the per-file _EOIPadded wrapper instead."""
+    with _truncated_lock:
+        old = ImageFile.LOAD_TRUNCATED_IMAGES
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+        try:
+            yield
+        finally:
+            ImageFile.LOAD_TRUNCATED_IMAGES = old
+
+
+@contextmanager
+def _nullcontext():
+    yield
+
+
+def _head(path: str | Path, n: int = 8) -> bytes:
+    with open(path, "rb") as f:
+        return f.read(n)
+
+
+def _is_png(path: str | Path) -> bool:
+    return _head(path) == PNG_SIGNATURE
+
+
+def _is_jpeg(path: str | Path) -> bool:
+    return _head(path, 3) == b"\xff\xd8\xff"
+
+
+def _png_chunks(f):
+    """Yield (type, data_offset, length) for each PNG chunk; stops at IEND or at a truncated header."""
+    f.seek(len(PNG_SIGNATURE))
+    while True:
+        header = f.read(8)
+        if len(header) < 8:
+            return
+        length, kind = struct.unpack(">I4s", header)
+        offset = f.tell()
+        yield kind, offset, length
+        if kind == b"IEND":
+            return
+        f.seek(offset + length + 4)
+
+
+def _png_without_text(path: str | Path) -> bytes:
+    """A copy of the PNG without its tEXt/zTXt/iTXt chunks (text is read separately by _png_text_chunks)."""
+    out = io.BytesIO()
+    out.write(PNG_SIGNATURE)
+    with open(path, "rb") as f:
+        for kind, offset, length in list(_png_chunks(f)):
+            if kind in PNG_TEXT_TYPES:
+                continue
+            f.seek(offset - 8)
+            out.write(f.read(length + 12))
+    return out.getvalue()
+
+
+def _inflate(data: bytes, limit: int = MAX_TEXT) -> bytes:
+    """Decompress at most `limit` bytes; never inflates a bomb in full."""
+    try:
+        return zlib.decompressobj().decompress(data, limit)
+    except zlib.error:
+        return b""
+
+
+def _png_text_chunks(path: str | Path) -> dict[str, str]:
+    """All PNG text chunks (also those after the image data), each value capped at MAX_TEXT characters."""
+    texts: dict[str, str] = {}
+    total = 0
+    with open(path, "rb") as f:
+        count = 0
+        for kind, offset, length in _png_chunks(f):
+            if kind not in PNG_TEXT_TYPES:
+                continue
+            count += 1
+            if count > MAX_PNG_TEXT_CHUNKS or total > MAX_PNG_TEXT_TOTAL:
+                break
+            f.seek(offset)
+            data = f.read(min(length, 4 * MAX_TEXT + 1024))
+            key, _, rest = data.partition(b"\0")
+            if not key or len(key) > 79:
+                continue
+            if kind == b"tEXt":
+                value = rest[:MAX_TEXT].decode("latin-1")
+            elif kind == b"zTXt":
+                value = _inflate(rest[1:]).decode("latin-1") if rest[:1] == b"\0" else ""
+            else:  # iTXt: flag, method, language\0, translated keyword\0, text
+                if len(rest) < 2:
+                    continue
+                compressed, body = rest[0], rest[2:]
+                parts = body.split(b"\0", 2)
+                if len(parts) < 3:
+                    continue
+                raw = _inflate(parts[2]) if compressed else parts[2][:MAX_TEXT]
+                value = raw.decode("utf-8", "replace")
+            name = key.decode("latin-1")
+            if value and name not in texts:
+                texts[name] = value
+                total += len(value)
+    return texts

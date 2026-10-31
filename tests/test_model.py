@@ -74,3 +74,24 @@ def test_e2e_video_frames(client):
     assert m["frames_checked"] == 8 and len(m["frame_probabilities"]) == 8
     assert 0 <= m["ai_probability"] <= 1
     assert "8 sampled frames" in next(s["text"] for s in body["signals"] if s["kind"] == "model")
+
+
+@pytest.mark.parametrize("damage", ["truncate2", "truncate1k", "ztxt_png"])
+def test_e2e_damaged_ai_image_still_detected(client, damage):
+    """Regression: damaged files used to skip the detector silently (verdict "unknown", no model block)."""
+    import io
+
+    from tests import media
+
+    data = (FIXTURES / "ai_face_stylegan.jpg").read_bytes()
+    if damage == "truncate2":
+        data = data[:-2]
+    elif damage == "truncate1k":
+        data = data[:-1000]
+    else:
+        buf = io.BytesIO()
+        Image.open(FIXTURES / "ai_face_stylegan.jpg").save(buf, "PNG")
+        data = media.insert_png_chunk(buf.getvalue(), media.ztxt_bomb())
+    body = client.post("/api/scan", files={"file": ("x", data)}).json()
+    assert body["model"] is not None and body["model"]["ai_probability"] >= model.LIKELY
+    assert body["verdict"] == "ai"

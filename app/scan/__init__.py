@@ -131,6 +131,7 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
     frames = []
     camera = ""
     camera_details = False
+    detector_reason = "the file could not be decoded"  # why the model could not run, if it did not
     if kind == "image":
         try:
             meta = exif.extract(path)
@@ -147,15 +148,21 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         camera = meta.camera if (meta.make or meta.model) else ""
         camera_details = meta.camera_details
         has_metadata = meta.has_exif or bool(meta.xmp) or bool(meta.text_chunks)
-        if not meta.error and model.enabled():
+        if meta.error:
+            detector_reason = "the image could not be opened"
+        elif model.enabled():
             try:
-                img = exif.load_for_model(path)
-                if img is not None:
-                    frames = [img]
+                decoded = exif.decode_for_model(path)
+                frames = [decoded.image]
+                for note in decoded.notes:
+                    out.add("info", f"Note: {note}.", 0.1)
             except exif.ImageTooLarge as exc:
                 raise UnsupportedMedia("Image dimensions are too large to scan.") from exc
+            except exif.DecodeFailed as exc:
+                detector_reason = exc.reason
             except Exception as exc:
                 log.info("image decode for model failed: %s", type(exc).__name__)
+                detector_reason = f"the image could not be decoded ({type(exc).__name__})"
     else:
         vid = video.probe(path, sample=video.SAMPLE_FRAMES if model.enabled() else 0)
         if vid.width and vid.height:
@@ -167,6 +174,7 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         tool_fields += vid.tool_fields()
         camera = " ".join(x for x in (vid.make, vid.model) if x)
         frames = vid.frames
+        detector_reason = vid.error or "no video frames could be decoded"
         has_metadata = bool(camera) or any(k.startswith("com.apple") for k in vid.metadata)
 
     text_hits = markers.scan_text(tool_fields)
@@ -185,9 +193,14 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         detail = " with exposure settings" if camera_details else ""
         out.add("camera", f"Camera data found ({camera}){detail}. Real cameras write this, but it can be copied or faked.", 0.4)
 
-    model_info = _run_model(out, frames, kind)
+    model_info, model_failure = _run_model(out, frames, kind)
+    detector_failed = model.enabled() and model_info is None
+    if detector_failed:
+        # Never skip the model silently: an unanalyzed file must not look like a clean one.
+        reason = model_failure or detector_reason
+        out.add("info", f"AI detector could not analyze this file ({reason}).", 0.2)
 
-    if not out.signals and kind == "image" and not has_metadata:
+    if not out.signals and kind == "image" and not has_metadata and not detector_failed:
         out.add("info", "No metadata at all. Often a sign it was stripped by a social app, or on purpose.", 0.1)
 
     verdict, title, detail = _verdict(out, cred, model_info)
@@ -235,16 +248,17 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
         out.add("c2pa", f"Content credentials list the source type as: {kinds} (not generative AI).", 0.3)
 
 
-def _run_model(out: _Collector, frames: list, kind: str) -> ModelInfo | None:
+def _run_model(out: _Collector, frames: list, kind: str) -> tuple[ModelInfo | None, str | None]:
+    """Run the detector. Returns (info, None), or (None, reason) when it ran but gave no result."""
     if not frames:
-        return None
+        return None, None
     try:
         probs = model.predict(frames)
     except Exception:
         log.exception("model inference failed")
-        return None
+        return None, "the detector failed on this file"
     if not probs:
-        return None
+        return None, "the detector is not available on this server"
     if kind == "video" and len(probs) > 1:
         # Average of the most suspicious half of the frames: a partly synthetic clip is not diluted
         # by its real frames, while a single odd frame cannot dominate.
@@ -267,7 +281,7 @@ def _run_model(out: _Collector, frames: list, kind: str) -> ModelInfo | None:
         out.add("model", f"Our detector model sees possible signs of AI generation ({pct}%){frames_note}. Not conclusive.", p)
     else:
         out.add("model", f"Our detector model found no strong AI signal ({pct}%){frames_note}. Detectors miss many fakes, so this does not mean it is real.", p)
-    return info
+    return info, None
 
 
 def _pct(p: float) -> int:

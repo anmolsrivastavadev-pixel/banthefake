@@ -133,3 +133,32 @@ def mp4(metadata: dict[str, str] | None = None, stream_metadata: dict[str, str] 
             for packet in st.encode():
                 out.mux(packet)
         return path.read_bytes()
+
+
+def png_chunk(kind: bytes, data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+
+def insert_png_chunk(data: bytes, chunk: bytes, after_image: bool = False) -> bytes:
+    """Insert a raw chunk right after IHDR, or right before IEND."""
+    if after_image:
+        i = data.rindex(b"IEND") - 4
+        return data[:i] + chunk + data[i:]
+    return data[:33] + chunk + data[33:]
+
+
+def ztxt_bomb(key: str = "Comment", inflated: int = 8 * 1024 * 1024) -> bytes:
+    """A zTXt chunk that inflates far past Pillow's MAX_TEXT_CHUNK (1 MB)."""
+    return png_chunk(b"zTXt", key.encode() + b"\0\0" + zlib.compress(b"A" * inflated, 9))
+
+
+def photo_png(size=(256, 192)) -> bytes:
+    buf = io.BytesIO()
+    _gradient(size).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def photo_jpeg(size=(256, 192)) -> bytes:
+    buf = io.BytesIO()
+    _gradient(size).save(buf, "JPEG", quality=90)
+    return buf.getvalue()
