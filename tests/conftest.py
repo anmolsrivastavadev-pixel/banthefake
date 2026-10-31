@@ -45,7 +45,8 @@ def _model_off_unless_ml(request, monkeypatch):
 @pytest.fixture
 def make_client(tmp_path: Path) -> Callable[..., TestClient]:
     def make(**overrides) -> TestClient:
-        base = Settings(db_path=tmp_path / "test.db", sign_rate=100, scan_rate=100, admin_token=ADMIN)
+        base = Settings(db_path=tmp_path / "test.db", sign_rate=100, sign_attempt_rate=1000, scan_rate=100,
+                        admin_token=ADMIN)
         return TestClient(create_app(replace(base, **overrides)))
 
     return make

@@ -31,6 +31,13 @@ class RateLimiter:
             hits.append(now)
             return True
 
+    def allowed(self, key: str) -> bool:
+        """True if `key` is under the limit, without recording a hit (pair with `hit` on success)."""
+        cutoff = self._clock() - self.window
+        with self._lock:
+            hits = self._hits.get(key)
+            return hits is None or sum(1 for t in hits if t > cutoff) < self.limit
+
     def _sweep(self, cutoff: float) -> None:
         stale = [k for k, hits in self._hits.items() if not hits or hits[-1] <= cutoff]
         for k in stale:

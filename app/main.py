@@ -129,7 +129,11 @@ class ScanSlots:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     store = PetitionStore(settings.db_path)
+    # Petition rate limits: stored signatures count against BTF_SIGN_RATE, so a typo or a duplicate does
+    # not use up a household's quota; every attempt (valid or not) counts against the higher
+    # BTF_SIGN_ATTEMPT_RATE, which caps probing and junk submissions.
     sign_limiter = RateLimiter(settings.sign_rate, 3600)
+    attempt_limiter = RateLimiter(settings.sign_attempt_rate, 3600)
     scan_limiter = RateLimiter(settings.scan_rate, 60)
     scan_slots = ScanSlots(settings.scan_concurrency)
 
@@ -198,7 +202,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/petition", status_code=201)
     async def sign(request: Request):
-        if not sign_limiter.hit(client_ip(request)):
+        ip = client_ip(request)
+        if not attempt_limiter.hit(ip) or not sign_limiter.allowed(ip):
             return error(429, "Too many attempts. Please try again later.")
         try:
             payload = await read_json(request)
@@ -207,6 +212,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not isinstance(payload, dict):
             return error(400, "Invalid request body.")
         if payload.get("website"):
+            sign_limiter.hit(ip)  # looks like a success to the bot, so it counts like one
             return JSONResponse({"ok": True}, status_code=201)
         try:
             sig = validate(payload)
@@ -214,6 +220,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return error(422, str(exc))
         if not await run_in_threadpool(store.add, sig):
             return error(409, "already_signed")
+        sign_limiter.hit(ip)
         return JSONResponse({"ok": True}, status_code=201)
 
     @app.get("/api/petition/count")

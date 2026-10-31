@@ -20,7 +20,8 @@ class Settings:
     scan_rate: int = 10
     scan_concurrency: int = 2  # scans decoding media at the same time (memory bound)
     scan_wait_s: float = 30.0  # how long a scan may queue for a slot before 503 "busy"
-    sign_rate: int = 5
+    sign_rate: int = 5  # successful signatures per hour per IP
+    sign_attempt_rate: int = 30  # all petition POSTs (including rejected ones) per hour per IP
     petition_goal: int = 10000
     admin_token: str | None = None
     model: str = "auto"
@@ -39,6 +40,7 @@ class Settings:
             scan_concurrency=max(1, _int("BTF_SCAN_CONCURRENCY", cls.scan_concurrency)),
             scan_wait_s=_float("BTF_SCAN_WAIT_S", cls.scan_wait_s),
             sign_rate=_int("BTF_SIGN_RATE", cls.sign_rate),
+            sign_attempt_rate=_int("BTF_SIGN_ATTEMPT_RATE", cls.sign_attempt_rate),
             petition_goal=_int("BTF_PETITION_GOAL", cls.petition_goal),
             admin_token=os.environ.get("BTF_ADMIN_TOKEN") or None,
             model=(os.environ.get("BTF_MODEL") or cls.model).strip().lower(),
