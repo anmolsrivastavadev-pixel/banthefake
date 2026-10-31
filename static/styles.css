@@ -16,6 +16,7 @@
   --red-soft: rgba(255,77,77,.12);
   --amber: #ffb547;
   --green: #3ddc84;
+  --blue: #62a8ff;
   --font-display: "Space Grotesk", system-ui, sans-serif;
   --font-body: "Inter", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
@@ -93,6 +94,8 @@ section { padding: 96px 0; border-top: 1px solid var(--line); }
 .verdict.caution .dot { background: var(--amber); }
 .verdict.neutral { border-color: var(--line-strong); background: var(--surface); }
 .verdict.neutral .dot { background: var(--muted); }
+.verdict.verified { border-color: rgba(98,168,255,.55); background: rgba(98,168,255,.10); }
+.verdict.verified .dot { background: var(--blue); box-shadow: 0 0 10px rgba(98,168,255,.55); }
 .verdict b { display: block; font-family: var(--font-display); font-size: 18px; }
 .signals { list-style: none; display: grid; gap: 8px; font-size: 14px; }
 .signals li { display: flex; gap: 10px; padding: 10px 12px; border-radius: 8px; background: var(--surface); }

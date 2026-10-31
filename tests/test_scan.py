@@ -23,7 +23,7 @@ def test_scan_returns_report(client):
     res = client.post("/api/scan", files={"file": ("x.png", data, "image/png")})
     assert res.status_code == 200
     body = res.json()
-    assert body["verdict"] in {"ai", "edited", "camera", "unknown"}
+    assert body["verdict"] in {"verified_capture", "verified_ai", "ai", "edited", "camera", "unknown"}
     assert {"verdict_title", "verdict_detail", "signals", "c2pa", "model", "file"} <= body.keys()
     assert body["file"] == {"type": "image", "mime": "image/png", "size_bytes": len(data), "width": 8, "height": 8}
 

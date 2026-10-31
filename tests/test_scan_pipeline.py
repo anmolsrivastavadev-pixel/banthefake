@@ -10,14 +10,15 @@ from tests import media
 from tests.conftest import FIXTURES
 
 REAL_CLAIM = re.compile(r"\b(is|looks|appears) (real|authentic|genuine)\b|\bverified real\b", re.I)
-NEGATED = re.compile(r"(does not mean (it|the file) is real|can prove a file is real)", re.I)
+NEGATED = re.compile(r"(does not mean (it|the file) is real|can prove a file is real|not that the scene itself is real)", re.I)
 
 
 def post(client, name, data, mime="application/octet-stream"):
     res = client.post("/api/scan", files={"file": (name, data, mime)})
     assert res.status_code == 200, res.text
     body = res.json()
-    assert scan.NO_PROOF in body["verdict_detail"]
+    if not body["verdict"].startswith("verified_"):
+        assert scan.NO_PROOF in body["verdict_detail"]
     for text in [body["verdict_title"], body["verdict_detail"], *(s["text"] for s in body["signals"])]:
         assert not REAL_CLAIM.search(NEGATED.sub("", text)), text
     for s in body["signals"]:
@@ -72,10 +73,55 @@ def test_ai_c2pa_declaration(client, monkeypatch):
     )
     monkeypatch.setattr(c2pa_check, "read", lambda path, mime: declared)
     body = post(client, "c.png", media.png())
-    assert body["verdict"] == "ai"
+    assert body["verdict"] == "verified_ai"
     assert body["c2pa"]["ai_generated"] is True and body["c2pa"]["issuer"] == "OpenAI"
-    assert "content credentials declare" in body["verdict_detail"].lower()
+    assert "content credentials" in body["verdict_detail"].lower() and "declare generative ai" in body["verdict_detail"].lower()
     assert kinds(body).count("ai") == 1  # C2PA claim and raw IPTC marker are not double-counted
+
+
+def test_official_pixel_is_verified_capture(client):
+    body = post(client, "pixel10_verified.jpg", (FIXTURES / "pixel10_verified.jpg").read_bytes())
+    assert body["verdict"] == "verified_capture"
+    assert body["verdict_title"] == "Verified camera capture"
+    assert "Signed by Pixel Camera (Google LLC) at capture and unchanged since" in body["verdict_detail"]
+    assert "not that the scene itself is real" in body["verdict_detail"]
+    assert body["c2pa"]["capture"] is True
+    assert body["c2pa"]["trust_list_version"] == "2026-10-23"
+
+
+def test_tampered_trusted_file_is_ignored(client):
+    data = bytearray((FIXTURES / "pixel10_verified.jpg").read_bytes())
+    data[-1000] ^= 1
+    body = post(client, "tampered.jpg", bytes(data))
+    assert body["verdict"] not in {"verified_capture", "verified_ai"}
+    assert any("failed validation" in s["text"] and "ignored" in s["text"] for s in body["signals"])
+
+
+def test_trust_off_prevents_verified_verdict(client, monkeypatch):
+    monkeypatch.setenv("BTF_C2PA_TRUST", "off")
+    body = post(client, "pixel10_verified.jpg", (FIXTURES / "pixel10_verified.jpg").read_bytes())
+    assert body["verdict"] != "verified_capture"
+    assert body["c2pa"]["valid"] and not body["c2pa"]["trusted"]
+
+
+def test_verified_capture_records_edits_and_wins_over_model(client, monkeypatch):
+    from app.scan import c2pa_check
+
+    cred = c2pa_check.C2PAResult(
+        present=True, valid=True, trusted=True, signer="Camera Co", capture=True,
+        actions=["c2pa.created", "c2pa.cropped"], trust_list_version="2026-10-23",
+    )
+    monkeypatch.setattr(c2pa_check, "read", lambda path, mime: cred)
+    monkeypatch.setenv("BTF_MODEL", "auto")
+    monkeypatch.setattr(model, "enabled", lambda: True)
+    monkeypatch.setattr(model, "predict", lambda frames: [0.99])
+    monkeypatch.setattr(model, "name", lambda: "test detector")
+    body = post(client, "capture.png", media.png())
+    assert body["verdict"] == "verified_capture"
+    assert body["verdict_title"] == "Verified capture with recorded edits"
+    assert "recorded edits: cropped" in body["verdict_detail"]
+    assert any("strongly disagrees" in s["text"] for s in body["signals"] if s["kind"] == "info")
+    assert body["model"]["ai_probability"] == 0.99
 
 
 def test_edited_photoshop_software(client):
@@ -91,11 +137,12 @@ def test_edited_real_fixture_with_photoshop_xmp(client):
 
 def test_edited_c2pa_color_adjustments(client):
     body = post(client, "CA.jpg", (FIXTURES / "CA.jpg").read_bytes())
-    assert body["verdict"] == "edited"
+    assert body["verdict"] == "unknown"
     c = body["c2pa"]
     assert c["present"] and c["valid"] and not c["trusted"] and not c["ai_generated"]
     assert "c2pa.color_adjustments" in c["actions"]
     assert any("not on our trust list" in s["text"] for s in body["signals"] if s["kind"] == "c2pa")
+    assert "edit" not in kinds(body)
 
 
 def test_c2pa_algorithmic_media_is_not_ai(client):
@@ -103,6 +150,21 @@ def test_c2pa_algorithmic_media_is_not_ai(client):
     assert body["verdict"] == "unknown"
     assert body["c2pa"]["ai_generated"] is False and body["c2pa"]["generator"].startswith("make_test_images")
     assert "ai" not in kinds(body)
+
+
+def test_untrusted_ai_declaration_is_informational(client, monkeypatch):
+    from app.scan import c2pa_check
+
+    cred = c2pa_check.C2PAResult(
+        present=True, valid=True, trusted=False, untrusted=True, signer="Unknown signer",
+        ai_generated=True, actions=["c2pa.created"],
+        source_types=["http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"],
+    )
+    monkeypatch.setattr(c2pa_check, "read", lambda path, mime: cred)
+    body = post(client, "untrusted.png", media.png())
+    assert body["verdict"] == "unknown"
+    assert "ai" not in kinds(body)
+    assert any("informational only" in s["text"] for s in body["signals"] if s["kind"] == "c2pa")
 
 
 def test_camera_exif(client):

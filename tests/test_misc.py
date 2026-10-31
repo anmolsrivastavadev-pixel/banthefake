@@ -40,3 +40,13 @@ def test_camera_verdict_is_not_styled_green(client):
     cam_tag = re.search(r"\.tag\.cam\s*\{[^}]*\}", css).group(0)
     assert "green" not in cam_tag
     assert not re.search(r"\.verdict\.ok[^{]*\{[^}]*green", css)
+
+
+def test_verified_capture_has_distinct_blue_style(client):
+    import re
+
+    js = client.get("/app.js").text
+    css = client.get("/styles.css").text
+    assert "verified_capture: 'verified'" in js
+    rule = re.search(r"\.verdict\.verified\s*\{[^}]*\}", css).group(0)
+    assert "98,168,255" in rule and "green" not in rule

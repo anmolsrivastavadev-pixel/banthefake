@@ -18,8 +18,11 @@ Stack: Python 3.12, FastAPI, Uvicorn and SQLite, managed with [uv](https://docs.
 
 Read this before you rely on a result.
 
-- **No tool can prove that a file is authentic.** Every verdict says so. A "camera" or "unknown" verdict does
-  not mean the file is real. It only means no evidence of AI generation was found.
+- **No tool can prove that a depicted scene is real.** A `verified_capture` verdict is a strong positive
+  provenance signal: the file has valid Content Credentials from a signer on the official C2PA trust list,
+  with a capture claim, and has not changed since the signed history. This proves where the file came from,
+  but a camera can still photograph a screen or a staged scene. A `camera` or `unknown` verdict does not mean
+  the file is real; it only means no evidence of AI generation was found.
 - **Most metadata does not survive sharing.** Social apps and messengers (WhatsApp, Instagram, X, Facebook and
   others) usually strip EXIF, XMP and C2PA data, and anyone can remove it on purpose. If markers are missing,
   that tells you nothing. Markers that are present are strong evidence, but they can be forged too.
@@ -46,9 +49,9 @@ Read this before you rely on a result.
   (undecodable, a non-JPEG image above the decode limit, no decodable video frames, model unavailable), an
   `info` signal "AI detector could not analyze this file (reason)" is added. Truncated or damaged files are
   retried in a tolerant mode and analyzed as far as they can be read, with a note saying so.
-- **C2PA signer trust needs configuration.** Manifests are read and their cryptographic validity is checked
-  offline (no remote manifest or OCSP fetch). Whether the *signer* is trusted depends on the trust anchors you
-  provide in `BTF_C2PA_TRUST_ANCHORS`. Without them, valid manifests are reported as `"trusted": false`.
+- **C2PA trust is checked offline.** The app ships the official C2PA signing and timestamp trust lists. Remote
+  manifests and OCSP fetches stay disabled. A cryptographically valid manifest from a signer outside that list
+  is reported as untrusted and remains informational; it never drives a verified verdict.
 
 ## Quickstart
 
@@ -84,7 +87,8 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_MODEL_THREADS` | unset (torch default) | Integer passed to `torch.set_num_threads`. |
 | `BTF_MAX_IMAGE_PIXELS` | `120000000` | Images larger than this many pixels are refused (decompression-bomb guard). |
 | `BTF_MAX_DECODE_PIXELS` | `25000000` | Largest image decoded at full size for the detector. JPEGs above it are decoded at 1/2, 1/4 or 1/8 scale; other formats above it are not analyzed by the detector (the report says so). |
-| `BTF_C2PA_TRUST_ANCHORS` | unset | Path to a PEM file of trusted C2PA signing roots. Without it, no signer is reported as trusted. |
+| `BTF_C2PA_TRUST` | `official` | `official` uses the bundled C2PA signing and timestamp trust lists. `off` disables signer trust, so no manifest receives a verified verdict. |
+| `BTF_C2PA_TRUST_ANCHORS` | unset | Path to a PEM file of trusted C2PA roots. When set, this replaces the bundled anchors. The bundled `store.cfg` EKU policy is still applied. |
 | `HF_HOME` | `~/.cache/huggingface`. The Docker image sets `/opt/hf` | Hugging Face cache for the detector weights. Set `HF_HUB_OFFLINE=1` to forbid downloads. |
 
 ## API
@@ -136,11 +140,31 @@ Example scan report:
 }
 ```
 
-`verdict` is one of `ai`, `edited`, `camera` or `unknown`. The `kind` of a signal is one of `ai`, `edit`,
+`verdict` is one of `verified_capture`, `verified_ai`, `ai`, `edited`, `camera` or `unknown`.
+`verified_capture` requires a fully valid manifest from a trusted signer with a `c2pa.created` action whose
+digital source type is `digitalCapture` or `computationalCapture`, and no generative-AI source type.
+`verified_ai` requires a fully valid, trusted manifest declaring trained-algorithmic media. Valid but
+untrusted manifests remain informational. The `kind` of a signal is one of `ai`, `edit`,
 `camera`, `c2pa`, `model` or `info`. Marker signals (`ai`, `edit`) also have `field` (where the marker was
 found) and `snippet` (the matched text, at most 80 characters). When present, `c2pa` has the fields `present`,
-`valid`, `trusted`, `generator`, `issuer`, `ai_generated` and `actions`. For videos, `model` also has
+`valid`, `trusted`, `generator`, `issuer`, `signer`, `signed_at`, `capture`, `ai_generated`, `actions`,
+`edits`, `ingredients` and `trust_list_version`. For videos, `model` also has
 `frame_probabilities`, `frame_timestamps` and `coverage` (`first_s`, `last_s`, `duration_s`).
+
+### Updating the C2PA trust list
+
+The bundled trust material is in `app/trust/`. Its current issue date is **2026-10-23** and its next-update
+date is **2027-01-21**. To update it:
+
+1. Obtain the current signing list, timestamp list and `store.cfg` from
+   <https://c2pa.org/conformance>.
+2. Check the issue and next-update fields, then replace all three files together. Update
+   `app/trust/VERSION` and `app/trust/README.md` with the new dates.
+3. Run both test suites and verify that an official sample is trusted, the C2PA test certificate remains
+   untrusted, a tampered sample is invalid, and `BTF_C2PA_TRUST=off` trusts nothing.
+
+The research-only `anchors.pem` is not shipped because its source and redistribution terms have not been
+confirmed.
 
 ### Admin examples
 

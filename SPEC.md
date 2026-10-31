@@ -39,17 +39,21 @@ All JSON. Errors: `{"error": "<message>"}` with proper status code.
 - Response:
 ```json
 {
-  "verdict": "ai" | "edited" | "camera" | "unknown",
+  "verdict": "verified_capture" | "verified_ai" | "ai" | "edited" | "camera" | "unknown",
   "verdict_title": "...", "verdict_detail": "...",
   "signals": [{"kind": "ai|edit|camera|c2pa|model|info", "text": "...", "weight": 0.0-1.0}],
-  "c2pa": null | {"present": true, "valid": bool, "generator": str, "issuer": str, "ai_generated": bool, "actions": [...]},
+  "c2pa": null | {"present": true, "valid": bool, "trusted": bool, "generator": str, "issuer": str,
+    "signer": str, "signed_at": str, "capture": bool, "ai_generated": bool, "actions": [...],
+    "edits": [...], "ingredients": [...], "trust_list_version": str},
   "model": null | {"name": str, "ai_probability": float, "frames_checked": int},
   "file": {"type": "image|video", "mime": str, "size_bytes": int, "width": int?, "height": int?}
 }
 ```
-- Verdict rules: C2PA or IPTC says AI, or generator markers → `ai`. Model probability ≥ 0.85 → `ai` with
+- Verdict rules: a fully valid, officially trusted C2PA camera-capture claim → `verified_capture`; a fully
+  valid, officially trusted generative-AI claim → `verified_ai`. Valid but untrusted claims are informational.
+  Otherwise C2PA or IPTC says AI, or generator markers → `ai`. Model probability ≥ 0.85 → `ai` with
   wording "likely". Editing software only → `edited`. Camera EXIF and nothing else → `camera`. Else `unknown`.
-  Copy must always state that no tool can prove a file is real.
+  Capture copy states that provenance does not prove the depicted scene itself is real.
 
 ### Petition
 - `POST /api/petition` `{name, email, location?, consent: true, website?}`

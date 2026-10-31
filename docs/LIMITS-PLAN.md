@@ -30,7 +30,22 @@ Plan:
   copied into `tests/fixtures/` with an ATTRIBUTION entry.
 - Wording must say what is and isn't proven.
 
-Status: research partly done (trust lists + Pixel 10 samples downloaded, `research/c2pa/scripts/verify.py`).
+Status: complete (2026-10-31). The app ships the official C2PA signing and TSA lists issued
+2026-10-23 (next update 2027-01-21), defaults to offline official trust, supports
+`BTF_C2PA_TRUST=off` and the `BTF_C2PA_TRUST_ANCHORS` override, and never enables OCSP or remote
+manifest fetch. `anchors.pem` was excluded because its source and redistribution terms could not be
+confirmed. A trusted `c2pa.created` action with `digitalCapture` or `computationalCapture` and no
+generative-AI source type drives `verified_capture`; a trusted generative-AI declaration drives
+`verified_ai`. Valid untrusted claims are informational and invalid claims are ignored.
+
+Local validation matrix: the three Pixel 10 samples were `Trusted` with `official` and `both`
+(`signingCredential.trusted`, `timeStamp.trusted`), and `Valid` but untrusted with `none` and
+`legacy` (`signingCredential.untrusted`; timestamp also untrusted for Pixel). With `notrust`, trust
+checking was disabled and all files were merely `Valid`. `C.jpg` and `CA.jpg` stayed `Valid` with
+`signingCredential.untrusted` in every trust-checking mode, including official/both. The shipped
+Pixel fixture is an unmodified 2.8 MB CC BY-SA 4.0 file; a one-byte tamper produced
+`assertion.dataHash.mismatch`. Verification: 279 core tests passed (17 deselected), and 17 offline ML
+tests passed (279 deselected).
 
 ## Limit 2 — borderline Midjourney detection
 Plan:

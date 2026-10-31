@@ -14,7 +14,7 @@ from app.scan.markers import Hit
 
 log = logging.getLogger("banthefake.scan")
 
-Verdict = Literal["ai", "edited", "camera", "unknown"]
+Verdict = Literal["verified_capture", "verified_ai", "ai", "edited", "camera", "unknown"]
 SignalKind = Literal["ai", "edit", "camera", "c2pa", "model", "info"]
 
 NO_PROOF = "No tool can prove a file is real."
@@ -38,8 +38,14 @@ class C2PAInfo(TypedDict):
     trusted: bool
     generator: str
     issuer: str
+    signer: str
+    signed_at: str
+    capture: bool
     ai_generated: bool
     actions: list[str]
+    edits: list[str]
+    ingredients: list[dict[str, str]]
+    trust_list_version: str
 
 
 class Coverage(TypedDict):
@@ -206,11 +212,11 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         _c2pa_signals(out, cred)
     # most specific source first: a named metadata field beats a match somewhere in the raw bytes
     metadata_hits = text_hits + chunk_hits
-    if cred is None or cred.valid:
+    if cred is None:
         metadata_hits += raw_hits
     out.hits([h for h in metadata_hits if h.kind == "ai"])
     out.hits([h for h in text_hits if h.kind == "edit"])
-    if cred is not None and cred.readable and cred.valid and cred.edit_actions:
+    if cred is not None and cred.readable and cred.valid and cred.trusted and cred.edit_actions:
         names = ", ".join(_action_name(a) for a in cred.edit_actions[:6])
         out.add("edit", f"Content credentials record edits: {names}.", 0.6)
 
@@ -221,6 +227,12 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
     if low_colour:
         out.add("info", "The AI detector is unreliable on black-and-white or low-colour images.", 0.1)
     model_info, model_failure = _run_model(out, frames, kind, timestamps, duration, low_colour)
+    if cred is not None and cred.valid and cred.trusted and model_info is not None:
+        p = model_info["ai_probability"]
+        if cred.capture and p >= model.LIKELY:
+            out.add("info", "The AI detector strongly disagrees with the trusted capture credentials; both results are shown, and the cryptographic provenance determines the verdict.", 0.5)
+        elif cred.ai_generated and p < model.POSSIBLE:
+            out.add("info", "The AI detector found no strong AI signal, but the trusted content credentials declare generative AI; both results are shown, and the cryptographic provenance determines the verdict.", 0.5)
     detector_failed = model.enabled() and model_info is None
     if detector_failed:
         # Never skip the model silently: an unanalyzed file must not look like a clean one.
@@ -263,7 +275,7 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
             "so who made it cannot be confirmed"
         )
     out.add("c2pa", f"Content credentials (C2PA) found, made{by}; {sig}.", 0.7)
-    if cred.ai_generated:
+    if cred.ai_generated and cred.trusted:
         trained = any(t.rsplit("/", 1)[-1] == "trainedAlgorithmicMedia" for t in cred.source_types)
         key = "iptc_trained" if trained else "iptc_composite"
         source = next(t for t in cred.source_types if t.rsplit("/", 1)[-1] in c2pa_check.AI_SOURCE_TYPES)
@@ -273,7 +285,9 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
                       "C2PA actions digitalSourceType", snippet)])
     elif cred.source_types:
         kinds = ", ".join(dict.fromkeys(t.rsplit("/", 1)[-1] for t in cred.source_types))
-        out.add("c2pa", f"Content credentials list the source type as: {kinds} (not generative AI).", 0.3)
+        qualifier = "" if cred.trusted else " Untrusted credentials are informational only."
+        generated = "" if cred.ai_generated else " (not generative AI)"
+        out.add("c2pa", f"Content credentials list the source type as: {kinds}{generated}.{qualifier}", 0.3)
 
 
 def _run_model(
@@ -339,6 +353,26 @@ def _verdict(
     out: _Collector, cred, model_info: ModelInfo | None, detector_failed: bool = False, low_colour: bool = False
 ) -> tuple[Verdict, str, str]:
     prob = model_info["ai_probability"] if model_info else None
+    if cred is not None and cred.readable and cred.valid and cred.trusted and cred.capture:
+        signer = cred.signer or cred.issuer or "a trusted signer"
+        if cred.edit_actions:
+            edits = ", ".join(_action_name(a) for a in cred.edit_actions[:6])
+            return (
+                "verified_capture", "Verified capture with recorded edits",
+                f"Signed by {signer} at capture; recorded edits: {edits}. The file is unchanged since the latest signed edit. "
+                "This proves where the file came from, not that the scene itself is real (for example, it could be a photo of a screen).",
+            )
+        return (
+            "verified_capture", "Verified camera capture",
+            f"Signed by {signer} at capture and unchanged since. This proves where the file came from, not that the scene itself is real "
+            "(for example, it could be a photo of a screen).",
+        )
+    if cred is not None and cred.readable and cred.valid and cred.trusted and cred.ai_generated:
+        signer = cred.signer or cred.issuer or "a trusted signer"
+        return (
+            "verified_ai", "Verified AI provenance",
+            f"Trusted content credentials signed by {signer} declare generative AI, and the file is unchanged since signing.",
+        )
     if out.has("ai"):
         declared = cred is not None and cred.readable and cred.valid and cred.ai_generated
         detail = (

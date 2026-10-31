@@ -35,7 +35,14 @@ const TAGS = {
   info: ['info', 'INFO'],
 };
 // Camera data is not proof a file is real, so that verdict is styled neutrally, never as a green "all clear".
-const VERDICT_CLASS = { ai: 'warn', edited: 'caution', camera: 'neutral', unknown: '' };
+const VERDICT_CLASS = {
+  verified_capture: 'verified',
+  verified_ai: 'warn',
+  ai: 'warn',
+  edited: 'caution',
+  camera: 'neutral',
+  unknown: '',
+};
 const SCAN_ERRORS = {
   413: ['File too large', 'This file is over the upload limit. Try a smaller file or a shorter clip.'],
   415: ['Unsupported file', 'We can only scan JPG, PNG, WEBP, GIF, MP4, MOV and WEBM files.'],
@@ -119,12 +126,24 @@ function c2paBlock(c) {
   if (c.valid && c.trusted) signature = 'Valid, signer is on the trust list';
   else if (c.valid) signature = 'Intact, but the signer is not on our trust list';
   const actions = (c.actions || []).map(a => a.replace(/^c2pa\./, '').replace(/_/g, ' '));
+  const edits = (c.edits || []).map(a => a.replace(/^c2pa\./, '').replace(/_/g, ' '));
+  const ingredients = (c.ingredients || []).map(i => [i.title, i.format, i.relationship].filter(Boolean).join(' · '));
+  let signedAt = c.signed_at;
+  if (signedAt) {
+    const d = new Date(signedAt);
+    if (!Number.isNaN(d.getTime())) signedAt = d.toLocaleString();
+  }
   const b = block('Content credentials (C2PA)', [
     ['AI-generated', c.ai_generated ? 'Yes, declared in the credentials' : 'Not declared'],
+    ['Capture evidence', c.capture ? 'Yes, declared as a camera capture' : 'Not declared'],
     ['Made with', c.generator],
-    ['Signed by', c.issuer],
+    ['Signed by', c.signer || c.issuer],
+    ['Signed at', signedAt],
     ['Signature', signature],
+    ['Trust list', c.trust_list_version],
     ['Actions', actions.join(', ')],
+    ['Recorded edits', edits.join(', ')],
+    ['Ingredients', ingredients.join('; ')],
   ]);
   if (c.ai_generated) b.classList.add('flag');
   b.append(el('p', { class: 'note' }, 'Check the full history at contentcredentials.org/verify.'));
