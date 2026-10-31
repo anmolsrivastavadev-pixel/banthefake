@@ -11,3 +11,4 @@ Dockerfile
 .dockerignore
 README.md
 deploy/hetzner/.env
+app/models/face_detection_yunet_2023mar.onnx

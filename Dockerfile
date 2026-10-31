@@ -18,7 +18,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-# 1) Locked dependencies, including the `ml` extra, EXCEPT torch and its CUDA stack.
+# 1) Locked dependencies, including the `ml` and `faceswap` extras, EXCEPT torch and its CUDA stack.
 #    uv.lock pins torch from PyPI, whose Linux wheel pulls ~4 GB of nvidia/cuda/triton packages.
 #    We skip those here and install the matching CPU-only torch build in step 2, so pyproject.toml
 #    and uv.lock stay untouched. torch's pure-Python deps (sympy, networkx, ...) still come from the lock.
@@ -30,7 +30,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     for pkg in $(sed -nE 's/^name = "((nvidia-|cuda-)[^"]+|triton)"$/\1/p' uv.lock); do \
         skip="$skip --no-install-package $pkg"; \
     done; \
-    uv sync --frozen --no-dev --extra ml --no-install-project $skip; \
+    uv sync --frozen --no-dev --extra ml --extra faceswap --no-install-project $skip; \
     /app/.venv/bin/python -c "from c2pa import Context, Reader; print('c2pa ok')"
 
 # 2) CPU-only torch, same version as the lockfile, hash-pinned (download.pytorch.org is not covered by

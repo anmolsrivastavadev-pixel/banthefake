@@ -243,7 +243,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/health")
     async def health() -> dict:
         caps = scan.capabilities()
-        return {"ok": True, "model": caps["model"], "c2pa": caps["c2pa"]}
+        return {
+            "ok": True,
+            "model": caps["model"],
+            "faceswap": caps["faceswap"],
+            "c2pa": caps["c2pa"],
+        }
 
     @app.post("/api/petition", status_code=201)
     async def sign(request: Request):

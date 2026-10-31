@@ -1,6 +1,8 @@
 # Face-swap detection evaluation (YuNet + GenD)
 
-Date: 2026-10-31. Status: **evaluated; do not ship.** Gates failed (details below), so nothing was added to `app/`.
+Date: 2026-10-31. Status: **evaluated; do not enable this checkpoint.** Gates failed (details below). A later
+integration scaffold exists behind an off-by-default flag for a future checkpoint that passes every gate;
+this evaluated checkpoint is not approved for it.
 
 This follows "Limit 3" in `docs/LIMITS-PLAN.md`. The earlier write-up said the real-face false-positive rate
 (FPR) "cannot be measured honestly". That was too strong. FPR needs only real faces, and Wikimedia Commons has
@@ -134,8 +136,8 @@ latency there. That should still fit the time gates, except possibly the 4-face 
 | ≥500 real / ≥500 manipulated, 3 unseen methods | 550 / 640 / 4 methods | met for the self-made set only |
 | Checkpoint rights | MIT label, trained on non-commercial FF++ | **unresolved** |
 
-**Decision: do not ship, not even as opt-in experimental.** We created no `app/scan/faceswap.py` and no
-test file. Even under the most favourable reading (the largest-face policy chosen after the fact, recall
+**Decision: do not enable this checkpoint, even for the opt-in experiment.** The dormant integration does not
+include or select these weights. Even under the most favourable reading (the largest-face policy chosen after the fact, recall
 measured on our own crude swaps), recall stays below 80% and morph recall below 65%. The test FPR interval
 cannot rule out roughly 3–4% of real photos being flagged, and degraded real images are worse. The only real
 public deepfake in reach was missed.

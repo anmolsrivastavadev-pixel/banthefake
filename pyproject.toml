@@ -18,6 +18,11 @@ ml = [
     "torch>=2.15.0",
     "transformers>=5.22.1",
 ]
+faceswap = [
+    "onnxruntime>=1.20.0",
+    "torch>=2.15.0",
+    "transformers>=5.22.1",
+]
 
 [dependency-groups]
 dev = [
@@ -33,6 +38,7 @@ e2e = [
 testpaths = ["tests"]
 markers = [
     "ml: needs the ml extra (torch + transformers) and the detector weights",
+    "faceswap_ml: needs a real BTF_FACESWAP_WEIGHTS checkpoint",
     "e2e: browser end-to-end tests (uv run --group e2e pytest -m e2e); deselected by default",
 ]
 # Browser tests need the e2e group and Chromium: keep them out of the default run (`-m e2e` overrides this).

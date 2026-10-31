@@ -14,7 +14,7 @@ from typing import Literal, NotRequired, TypedDict
 
 from PIL import Image
 
-from app.scan import c2pa_check, exif, isolate, markers, model, video
+from app.scan import c2pa_check, exif, faceswap, isolate, markers, model, video
 from app.scan.markers import Hit
 
 log = logging.getLogger("banthefake.scan")
@@ -100,19 +100,22 @@ class ScanReport(TypedDict):
     c2pa: C2PAInfo | None
     model: ModelInfo | None
     file: FileInfo
+    faceswap: NotRequired[faceswap.FaceSwapReport]
 
 
 class Capabilities(TypedDict):
     model: Literal["loaded", "degraded", "loading", "off", "unavailable"]
+    faceswap: faceswap.Status
     c2pa: bool
 
 
 def capabilities() -> Capabilities:
-    return {"model": model.status(), "c2pa": c2pa_check.AVAILABLE}
+    return {"model": model.status(), "faceswap": faceswap.status(), "c2pa": c2pa_check.AVAILABLE}
 
 
 def warmup() -> None:
     model.warmup()
+    faceswap.warmup()
 
 
 def configure_isolation(concurrency: int) -> None:
@@ -332,7 +335,7 @@ def scan_file(
     deadline = deadline if deadline is not None else isolate.deadline_after_timeout()
     cancellation = cancellation or _CANCELLATION_CONTEXT.get() or isolate.CancellationToken()
     isolate.check_deadline(deadline)
-    want_frames = model.enabled()
+    want_frames = model.enabled() or faceswap.enabled()
     try:
         if isolate.enabled() and not _parser_instrumented():
             parsed = isolate.parse(path, filename, content_type, want_frames,
@@ -368,7 +371,7 @@ def scan_file(
     camera_details = parsed["camera_details"]
     has_metadata = parsed["has_metadata"]
     detector_reason = parsed["detector_reason"]
-    low_colour = parsed["low_colour"]
+    low_colour = parsed["low_colour"] if model.enabled() else False
 
     # --- assemble signals in priority order ----------------------------------------------------
     if cred is not None:
@@ -407,8 +410,13 @@ def scan_file(
     if not out.signals and kind == "image" and not has_metadata and not detector_failed:
         out.add("info", "No metadata at all. Often a sign it was stripped by a social app, or on purpose.", 0.1)
 
+    # This experimental result is informational only. Calculate the verdict first, then append its signal so
+    # it cannot affect the verdict or its title now or through a future change to verdict precedence.
     verdict, title, detail = _verdict(out, cred, model_info, detector_failed, low_colour)
-    return {
+    faceswap_info = None
+    if faceswap.enabled():
+        faceswap_info = _run_faceswap(out, frames, kind, timestamps, detector_reason, deadline)
+    report: ScanReport = {
         "verdict": verdict,
         "verdict_title": title,
         "verdict_detail": detail,
@@ -417,6 +425,64 @@ def scan_file(
         "model": model_info,
         "file": file_info,
     }
+    if faceswap_info is not None:
+        report["faceswap"] = faceswap_info
+    return report
+
+
+def _run_faceswap(
+    out: _Collector,
+    frames: list,
+    kind: str,
+    timestamps: list[float],
+    decode_reason: str,
+    deadline: float,
+) -> faceswap.FaceSwapReport:
+    remaining = isolate.remaining(deadline)
+    if remaining < isolate.infer_reserve_s():
+        why = "the scan time budget was too low to start face-swap inference"
+        out.add("info", f"Our experimental face-swap check was skipped ({why}).", 0.1)
+        return {"status": "unavailable", "experimental": True, "reason": why}
+    time_budget_s = min(faceswap.timeout_s(), remaining)
+    if not frames:
+        result, reason = None, decode_reason
+    elif kind == "video":
+        result, reason = faceswap.analyze_video_faces(frames, timestamps, time_budget_s=time_budget_s)
+    else:
+        result, reason = faceswap.analyze_faces(frames[0], time_budget_s=time_budget_s)
+    if result is None:
+        why = reason or "the face-swap backends are unavailable"
+        out.add("info", f"Our experimental face-swap check could not run ({why}).", 0.1)
+        return {"status": "unavailable", "experimental": True, "reason": why}
+
+    checked = len(result["faces"])
+    flagged = result["faces_flagged"]
+    skipped = result["faces_skipped"]
+    omitted = result["faces_omitted"]
+    suffix = ""
+    if skipped:
+        suffix += f" It skipped {skipped} low-confidence face candidate(s), face(s) smaller than 64 px, or unalignable face(s)."
+    if omitted:
+        suffix += f" It omitted {omitted} additional face(s) because of the configured face limits."
+    if result["faces_timed_out"]:
+        suffix += f" It did not score {result['faces_timed_out']} remaining face(s) before the inference deadline."
+    if not checked:
+        if result["candidates_detected"]:
+            text = "Our experimental face-swap check found face candidates, but none were large and confident enough to analyze."
+        else:
+            text = "Our experimental face-swap check found no faces to analyze."
+    elif result["flagged"]:
+        text = (
+            f"Our experimental face-swap check flagged {flagged} face(s) as possibly manipulated. "
+            "It is often wrong; treat it as a hint, not evidence."
+        )
+    else:
+        text = (
+            f"Our experimental face-swap check scored {checked} face(s) below its threshold. "
+            "It misses many face swaps, so this says nothing about whether the image is real."
+        )
+    out.add("info", text + suffix, 0.1)
+    return result
 
 
 def _action_name(action: str) -> str:

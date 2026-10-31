@@ -35,11 +35,13 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(autouse=True)
 def _model_off_unless_ml(request, monkeypatch):
-    """Keep regular tests fast and deterministic: the detector only runs in tests marked `ml`."""
+    """Keep regular tests fast and deterministic: ML backends run only in their marked tests."""
     if request.node.get_closest_marker("ml") is None:
         monkeypatch.setenv("BTF_MODEL", "off")
     else:
         monkeypatch.delenv("BTF_MODEL", raising=False)
+    if request.node.get_closest_marker("faceswap_ml") is None:
+        monkeypatch.setenv("BTF_FACESWAP", "off")
 
 
 @pytest.fixture

@@ -6,7 +6,8 @@ A self-hostable campaign site against harmful deepfakes, with working tools:
   notice (`static/privacy.html`), with no build step.
 - **Media scanner**: upload an image or video. The server checks it for AI-generator markers, IPTC "digital
   source type", EXIF/XMP camera and editing-software metadata, and C2PA Content Credentials, and runs optional
-  ML detectors (two models that must agree). The browser also shows a client-side ELA (error level analysis) heatmap.
+  ML detectors (two models that must agree), plus an opt-in experimental face-swap signal when local weights
+  are configured. The browser also shows a client-side ELA (error level analysis) heatmap.
 - **Petition**: sign with name, email and an optional location. Signatures are stored in SQLite, and admins can
   export them or erase them (GDPR).
 - **Letter generator**: fill in a few details and copy a ready-to-send letter to a representative. This runs in
@@ -48,15 +49,15 @@ Read this before you rely on a result.
   newer generators (GPT-image recall is weak) and deliberate evasion all lower accuracy. A low score never
   means "real". Black-and-white and low-colour images never get an AI verdict from the models, because the
   models are unreliable on them.
-- **No face-swap or lip-sync detection.** The detector classifies whole images and sampled video frames (up to
+- **No face-swap or lip-sync verdict.** The main detector classifies whole images and sampled video frames (up to
   8 frames spread over the whole clip, with a 20 s decode budget). On videos with keyframes far apart the
   sampler decodes forward in one pass instead of seeking; the report says which part of the clip was covered
   (`model.coverage`), and adds a note when the time budget ran out early. It is not trained to find a face
-  swapped into an otherwise real photo or video. A dedicated face detector was researched but not shipped:
-  the credible checkpoint has unresolved training-data rights, high CPU/RAM cost, and no openly licensed
-  benchmark large enough to establish its false-positive rate. We also measured the best openly licensed
-  candidate on 36 real faces: it flagged 92% of them as fake at a 0.5 threshold, so it is nowhere near
-  shippable. `docs/LIMITS-PLAN.md` records the gates for revisiting it.
+  swapped into an otherwise real photo or video. There is an **off-by-default experimental face-swap signal**
+  for locally supplied, separately approved checkpoints. It is informational only and can never change the
+  verdict or its title. It often gets faces wrong and misses many swaps. See
+  [`docs/FACESWAP-EVAL.md`](docs/FACESWAP-EVAL.md) for the measured evaluation and gating decision; no accuracy
+  is claimed here.
 - **Brand names only count where software is named.** A tool name such as "Midjourney" or "Firefly" is only
   treated as a marker in fields that name the creating software: EXIF `Software`/`ProcessingSoftware`, XMP
   `CreatorTool`/history `softwareAgent`, PNG generator keys (`parameters`, `prompt`, `workflow`, `Software`),
@@ -88,6 +89,7 @@ Read this before you rely on a result.
 ```bash
 uv sync                 # core app: metadata, markers and C2PA checks
 uv sync --extra ml      # optional: torch + transformers for the ML detector
+uv sync --extra faceswap # optional experiment: ML dependencies + ONNX Runtime
 uv run uvicorn app.main:app --reload
 ```
 
@@ -126,6 +128,46 @@ How the rule behaves in special cases:
 
 The thresholds were chosen on a calibration split and confirmed on a locked test split. Details are in
 [`docs/DETECTOR-BENCHMARK.md`](docs/DETECTOR-BENCHMARK.md).
+
+### Experimental face-swap signal
+
+This path is disabled unless `BTF_FACESWAP=on`. It makes no network requests and ships no classifier
+checkpoint. Supply a local classifier checkpoint through `BTF_FACESWAP_WEIGHTS`. The source checkout includes
+YuNet's `face_detection_yunet_2023mar.onnx`; the Docker image deliberately excludes it along with all other
+face-swap model assets. A separately supplied YuNet file can be selected through `BTF_YUNET_PATH`; it must have SHA-256
+`8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`. The default path is
+`app/models/face_detection_yunet_2023mar.onnx`.
+
+The `faceswap` extra uses MIT-licensed ONNX Runtime for YuNet inference and Pillow/NumPy for the aligned crop.
+It deliberately does not install OpenCV: on macOS, the tested `opencv-python-headless` and PyAV wheels load
+different bundled FFmpeg libraries and emit duplicate-class warnings that say crashes are possible. PyAV
+remains the only FFmpeg-backed media decoder in the process. The YuNet ONNX model is MIT-licensed, NumPy uses
+BSD-3-Clause, Torch uses BSD-3-Clause, and Transformers is Apache-2.0. A classifier checkpoint's own licence
+and training-data rights must be checked separately before it is enabled.
+
+The checkpoint is a dictionary written with `torch.save` and read with `torch.load(..., weights_only=True)`:
+
+```text
+format_version: 1
+model_version: non-empty display/version string
+backbone_id: openai/clip-* model id
+backbone_revision: non-empty pinned revision
+threshold: float in [0, 1]
+metadata_json: JSON string containing:
+  vision_config: CLIPVisionConfig.to_dict()               (required)
+  image_size: integer >= 16                               (optional; config value by default)
+  image_mean: [r, g, b]                                   (optional; OpenAI CLIP defaults)
+  image_std: [r, g, b]                                    (optional; OpenAI CLIP defaults)
+  positive_class: integer                                 (optional; 1 by default for a two-logit head)
+state_dict:
+  vision.<key>: every CLIPVisionModel state-dict tensor
+  layer_norm.weight, layer_norm.bias: trained LayerNorm tensors
+  head.weight, head.bias: trained linear head tensors (one sigmoid logit or two-or-more softmax logits)
+```
+
+The full vision state is stored in the checkpoint, so the recorded backbone id/revision is provenance rather
+than a download instruction. The loader validates every required field and tensor shape. A malformed or
+missing checkpoint makes `/api/health` report `"faceswap": "unavailable"`; it never fails a scan.
 
 Measured on an Apple M5 (CPU, torch default of 4 threads, warm models):
 
@@ -174,6 +216,11 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_MODEL2_REVISION` | pinned commit for the default model; unset for a custom model | Exact commit/tag for the secondary model. |
 | `BTF_MODEL_ENSEMBLE` | `on` | `off`, `0`, `false` or `no` runs only the secondary model with its previous thresholds (likely >= 0.85, possible >= 0.5). Otherwise both models run and "likely" needs both to agree. The thresholds were calibrated for the default pair; custom models need their own calibration. |
 | `BTF_MODEL_THREADS` | unset (torch default) | Integer passed to `torch.set_num_threads`. |
+| `BTF_FACESWAP` | `off` | `on` enables the experimental, informational-only face-swap signal. Every other value leaves it off. |
+| `BTF_FACESWAP_WEIGHTS` | unset | Path to the local checkpoint described above. Required when the experiment is on. No weights are downloaded. |
+| `BTF_FACESWAP_THRESHOLD` | checkpoint value | Optional score threshold override, from `0` to `1`. |
+| `BTF_FACESWAP_MAX_FACES` | `8` | Largest confident faces scored per sampled frame, from `1` to `64`. Candidates below 64 px are skipped. |
+| `BTF_YUNET_PATH` | `app/models/face_detection_yunet_2023mar.onnx` | Local YuNet ONNX file. It is present in the source checkout but excluded from the Docker image; verify the SHA-256 shown above when supplying it separately. |
 | `BTF_MAX_IMAGE_PIXELS` | `120000000` | Images larger than this many pixels are refused (decompression-bomb guard). |
 | `BTF_MAX_DECODE_PIXELS` | `25000000` | Largest image decoded at full size for the detector. JPEGs above it are decoded at 1/2, 1/4 or 1/8 scale; other formats above it are not analyzed by the detector (the report says so). |
 | `BTF_C2PA_TRUST` | `official` | `official` uses the bundled C2PA signing trust list (see "C2PA trust is checked offline" for why the TSA list is not loaded). `off` disables signer trust, so no manifest receives a verified verdict. |
@@ -191,7 +238,7 @@ carries `Strict-Transport-Security: max-age=31536000`.
 
 | Method and path | Body | Success | Errors |
 |---|---|---|---|
-| `GET /api/health` | none | 200 `{"ok": true, "model": "loaded"\|"degraded"\|"loading"\|"off"\|"unavailable", "c2pa": bool}` (`degraded`: one of the two detector models failed to load) | none |
+| `GET /api/health` | none | 200 `{"ok": true, "model": "loaded"\|"degraded"\|"loading"\|"off"\|"unavailable", "faceswap": "off"\|"loaded"\|"loading"\|"unavailable", "c2pa": bool}` (`degraded`: one of the two main detector models failed to load) | none |
 | `POST /api/scan` | `multipart/form-data`, field `file` | 200 scan report (below) | 400 (not multipart, no `file` field, empty, malformed or unterminated upload, client disconnected), 408 `upload_timeout`, 413 too large, 415 unsupported type (also audio-only MP4), 429 rate limited, 503 `busy` (no scan slot within `BTF_SCAN_WAIT_S`), 504 `scan_timeout`, 500 `scan_failed` |
 | `POST /api/petition` | `application/json`, at most 16 KB: `{"name", "email", "location"?, "consent": true, "website"?}` | 201 `{"ok": true}` | 400 body is not a JSON object, 409 `already_signed`, 413 body over 16 KB, 415 not `application/json`, 422 validation, 429 rate limited |
 | `GET /api/petition/count` | none | 200 `{"count": int, "goal": int}` | none |
@@ -261,6 +308,11 @@ only for a valid manifest from a trusted signer; `claimed_capture` is the manife
 `ai_generated` also covers an AI declaration in an ingredient's manifest (`ingredient_ai`); such ingredients
 carry `"ai_generated": "true"`. Generator, signer and signing time come from the manifest and are only
 verified when `valid` and `trusted` are both true.
+
+When the experiment is enabled, `faceswap` is either an unavailable block with `status`, `experimental` and
+`reason`, or a successful block with `faces` (`box`, `score`, and optional video `frame`/`timestamp_s`),
+`max_score`, `flagged`, `threshold`, `model_version`, candidate/skip counts and `frames_checked`. Its signal is
+always `kind: "info"`; clients must not use it to replace or reinterpret `verdict`.
 
 When present, `model` has these fields:
 

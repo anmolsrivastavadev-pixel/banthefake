@@ -95,7 +95,7 @@ actual bytes. The replacement uses reviewed exact category roots, explicit human
 perceptual hashes, pinned safetensors-only model snapshots, and source-grouped train/calibration/locked-test
 partitions.
 
-## Limit 3 — no face-swap detection
+## Limit 3 — no face-swap verdict
 Plan:
 - Face detection/cropping with a permissive CPU model (OpenCV YuNet, MIT).
 - Candidate face-forgery detectors with usable licences; eval on openly licensed data only
@@ -104,7 +104,8 @@ Plan:
 - Decision: ship / ship as experimental (off by default, never drives the verdict) / don't ship,
   based on measured FPR on real faces.
 
-Status: researched; **do not ship** (2026-10-31). OpenCV YuNet is a suitable MIT-licensed CPU face cropper.
+Status: researched; **do not enable the evaluated checkpoint** (2026-10-31). YuNet is a suitable
+MIT-licensed CPU face cropper.
 GenD is the only technically credible detector candidate found: its code and 1.2 GB CLIP-L/14 checkpoint are
 labelled MIT, but it was trained on FaceForensics++, whose source-data terms are noncommercial research only.
 The authors need to confirm commercial checkpoint rights. It also has no published CPU latency and is likely
@@ -123,6 +124,8 @@ Measured (2026-10-31, `docs/FACESWAP-EVAL.md`): real-face FPR *can* be measured 
 portraits, so the benchmark was run with 550 real faces (267 source groups) and 640 swaps between synthetic
 faces made with four classical methods. YuNet + GenD CLIP-L/14 failed the gates: test FPR 1.17% (Wilson 95%
 upper 3.39%; 4.3% on half-size images), overall recall 67.7% (morph 48.8%), 0/8 frames of a real public deepfake
-PSA flagged, added RSS 1.62 GB. Latency passed. **Still do not ship, not even opt-in.** Reopen if the GenD
+PSA flagged, added RSS 1.62 GB. Latency passed. **Still do not enable these weights, even opt-in.** A dormant,
+off-by-default integration now exists for a future checkpoint that clears every gate; it is informational and
+cannot drive a verdict. Reopen the model decision if the GenD
 authors confirm commercial rights, a larger real-face set (>1000, incl. phone/recompressed) and a licence-clean
 set of modern face swaps become available, or a quantised model clears the RSS gate.

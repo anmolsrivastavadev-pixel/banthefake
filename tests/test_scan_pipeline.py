@@ -241,4 +241,6 @@ def test_model_unavailable_degrades(client, monkeypatch):
 
 def test_model_off_capability(client):
     assert scan.capabilities()["model"] == "off"
-    assert client.get("/api/health").json() == {"ok": True, "model": "off", "c2pa": True}
+    assert client.get("/api/health").json() == {
+        "ok": True, "model": "off", "faceswap": "off", "c2pa": True,
+    }

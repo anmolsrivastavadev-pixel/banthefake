@@ -161,6 +161,9 @@ footer .wrap { display: flex; justify-content: space-between; gap: 20px; flex-wr
 .details:empty { display: none; }
 .block { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
 .block h3 { font: 500 12px var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.faceswap-block { border-color: rgba(255,181,71,.35); }
+.faceswap-block h3 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.experimental-badge { padding: 2px 7px; border: 1px solid rgba(255,181,71,.55); border-radius: 999px; color: var(--amber); font-size: 9px; letter-spacing: .08em; }
 .block dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 14px; }
 .block dt { color: var(--muted); }
 .block dd { overflow-wrap: anywhere; }

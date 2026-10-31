@@ -106,6 +106,7 @@ function renderReport(r) {
   const blocks = [];
   if (r.c2pa) blocks.push(c2paBlock(r.c2pa));
   if (r.model) blocks.push(modelBlock(r.model));
+  if (r.faceswap) blocks.push(faceSwapBlock(r.faceswap));
   if (r.file) {
     const f = r.file;
     blocks.push(block('File', [
@@ -209,6 +210,43 @@ function modelBlock(m) {
     b.append(el('p', { class: 'note' }, '"Likely AI-generated" needs both models to agree; one model on its own can only show possible signs.'));
   }
   b.append(el('p', { class: 'note' }, 'Estimates from machine-learning models. They can be wrong both ways, and low scores do not mean the file is real.'));
+  return b;
+}
+
+function faceSwapBlock(f) {
+  let b;
+  if (f.status !== 'ok') {
+    b = block('Face-swap check', [
+      ['Status', 'Unavailable'],
+      ['Reason', f.reason || 'The experimental backend could not run'],
+    ]);
+  } else {
+    const faces = Array.isArray(f.faces) ? f.faces : [];
+    let reading = 'No faces were large and confident enough to analyze';
+    if (faces.length) reading = f.flagged ? 'One or more faces were flagged' : 'Below threshold — this check misses many face swaps.';
+    const rows = [
+      ['Reading', reading],
+      ['Model', f.model_version],
+      ['Threshold', `${pct(f.threshold)}%`],
+      ['Frames checked', f.frames_checked > 1 ? String(f.frames_checked) : ''],
+      ['Candidates skipped', f.faces_skipped ? String(f.faces_skipped) : ''],
+      ['Faces omitted by limit', f.faces_omitted ? String(f.faces_omitted) : ''],
+      ['Faces skipped at deadline', f.faces_timed_out ? String(f.faces_timed_out) : ''],
+      ...faces.map((face, i) => {
+        const where = Number.isInteger(face.frame)
+          ? ` · frame ${face.frame + 1}${Number.isFinite(face.timestamp_s) ? ` at ${face.timestamp_s.toFixed(1)} s` : ''}`
+          : '';
+        const box = Array.isArray(face.box) ? ` · box ${face.box.join(', ')}` : '';
+        return [`Face ${i + 1}`, `${pct(face.score)}% manipulation score${where}${box}`];
+      }),
+    ];
+    b = block('Face-swap check', rows);
+    faces.forEach((face, i) => b.append(meter(face.score, `Face ${i + 1}: experimental manipulation score`)));
+    b.append(el('p', { class: 'note' }, 'Experimental and informational only. It is often wrong, misses many face swaps, and never changes the verdict.'));
+  }
+  b.classList.add('faceswap-block');
+  const heading = b.querySelector('h3');
+  heading.append(el('span', { class: 'experimental-badge' }, 'Experimental'));
   return b;
 }
 
