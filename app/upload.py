@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import BinaryIO
 
-from python_multipart.multipart import MultipartParser, parse_options_header
+from python_multipart.multipart import MultipartParser, MultipartState, parse_options_header
 from starlette.requests import Request
 
 MULTIPART_OVERHEAD = 64 * 1024
@@ -91,6 +91,8 @@ async def receive_file(request: Request, dest: BinaryIO, field: str, max_bytes: 
         except Exception as exc:
             raise UploadError(400, "Malformed upload.") from exc
     parser.finalize()
+    if parser.state != MultipartState.END:  # e.g. the closing boundary is missing: the upload is incomplete
+        raise UploadError(400, "Malformed upload: the multipart body is incomplete.")
     if not found:
         raise UploadError(400, f"No file in field '{field}'.")
     dest.flush()

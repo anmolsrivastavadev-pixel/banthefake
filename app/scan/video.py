@@ -26,6 +26,7 @@ class VideoInfo:
     duration_s: float | None = None
     codec: str = ""
     has_video: bool = False
+    audio_only: bool = False  # the container opened fine but has no video stream
     metadata: dict[str, str] = field(default_factory=dict)
     frames: list[Image.Image] = field(default_factory=list)
     timestamps: list[float] = field(default_factory=list)
@@ -67,6 +68,7 @@ def probe(path: str | Path, sample: int = SAMPLE_FRAMES) -> VideoInfo:
         info.metadata = {str(k)[:64]: str(v)[:1024] for k, v in (container.metadata or {}).items()}
         if not container.streams.video:
             info.error = "no video track"
+            info.audio_only = True
             return info
         stream = container.streams.video[0]
         for k, v in (stream.metadata or {}).items():

@@ -162,3 +162,27 @@ def photo_jpeg(size=(256, 192)) -> bytes:
     buf = io.BytesIO()
     _gradient(size).save(buf, "JPEG", quality=90)
     return buf.getvalue()
+
+
+def audio_only_mp4(seconds: float = 1.0) -> bytes:
+    """An MP4 (isom brand) with an AAC audio track and no video track."""
+    import tempfile
+    from pathlib import Path
+
+    import av
+    import numpy as np
+
+    rate = 44100
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "a.mp4"
+        with av.open(str(path), "w", format="mp4") as out:
+            st = out.add_stream("aac", rate=rate)
+            t = np.arange(int(seconds * rate)) / rate
+            samples = (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)[None, :]
+            frame = av.AudioFrame.from_ndarray(samples, format="fltp", layout="mono")
+            frame.sample_rate = rate
+            for packet in st.encode(frame):
+                out.mux(packet)
+            for packet in st.encode():
+                out.mux(packet)
+        return path.read_bytes()

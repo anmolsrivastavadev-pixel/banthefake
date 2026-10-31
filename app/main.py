@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import scan
@@ -178,10 +179,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if declared is not None and (not declared.isdigit() or int(declared) > MAX_JSON_BODY):
             raise BodyError(413, "Request body is too large.")
         body = bytearray()
-        async for chunk in request.stream():
-            body += chunk
-            if len(body) > MAX_JSON_BODY:
-                raise BodyError(413, "Request body is too large.")
+        try:
+            async for chunk in request.stream():
+                body += chunk
+                if len(body) > MAX_JSON_BODY:
+                    raise BodyError(413, "Request body is too large.")
+        except ClientDisconnect as exc:
+            raise BodyError(400, "The request was interrupted.") from exc
         try:
             return json.loads(body)
         except (ValueError, UnicodeDecodeError, RecursionError):
@@ -274,6 +278,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return report
         except UploadError as exc:
             return error(exc.status, exc.message)
+        except ClientDisconnect:
+            # The client went away mid-upload: routine, not a server error, so no traceback.
+            log.info("scan upload interrupted by client disconnect")
+            return error(400, "The upload was interrupted.")
         except scan.UnsupportedMedia as exc:
             return error(415, str(exc))
         except Exception:

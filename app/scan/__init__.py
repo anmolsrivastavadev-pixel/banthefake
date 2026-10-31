@@ -175,6 +175,9 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
                 detector_reason = f"the image could not be decoded ({type(exc).__name__})"
     else:
         vid = video.probe(path, sample=video.SAMPLE_FRAMES if model.enabled() else 0)
+        if vid.audio_only:
+            raise UnsupportedMedia("This file has no video track (audio-only files cannot be scanned). "
+                                   "Upload an image or a video.")
         if vid.width and vid.height:
             file_info["width"], file_info["height"] = vid.width, vid.height
         if vid.duration_s:

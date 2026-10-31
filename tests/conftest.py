@@ -1,10 +1,16 @@
+import atexit
 import os
+import shutil
 import tempfile
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
-os.environ.setdefault("BTF_DB_PATH", str(Path(tempfile.mkdtemp(prefix="btf-test-")) / "import.db"))
+# `app.main` builds a module-level app at import time, which opens BTF_DB_PATH: point it at a throwaway
+# directory that is removed when the test run ends.
+_IMPORT_DB_DIR = Path(tempfile.mkdtemp(prefix="btf-test-"))
+atexit.register(shutil.rmtree, _IMPORT_DB_DIR, ignore_errors=True)
+os.environ.setdefault("BTF_DB_PATH", str(_IMPORT_DB_DIR / "import.db"))
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
