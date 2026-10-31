@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -99,6 +100,16 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def masked_ip_network(address: str) -> str:
+    """Return a coarse network for security logs without exposing a full client IP."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return "unknown"
+    prefix = 24 if ip.version == 4 else 48
+    return str(ipaddress.ip_network((ip, prefix), strict=False))
+
+
 class ScanSlots:
     """At most `n` scans at a time, process-wide; waiters give up after a timeout.
 
@@ -138,6 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     sign_limiter = RateLimiter(settings.sign_rate, 3600)
     attempt_limiter = RateLimiter(settings.sign_attempt_rate, 3600)
     scan_limiter = RateLimiter(settings.scan_rate, 60)
+    admin_fail_limiter = RateLimiter(settings.admin_fail_rate, 3600)
     scan_slots = ScanSlots(settings.scan_concurrency)
 
     @asynccontextmanager
@@ -168,11 +180,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def check_admin(request: Request) -> JSONResponse | None:
         if not settings.admin_token:
             return error(404, "Not Found")
+        ip = client_ip(request)
+        if not admin_fail_limiter.allowed(ip):
+            return error(429, "rate_limited")
         auth = request.headers.get("authorization", "")
         scheme, _, token = auth.partition(" ")
         if scheme.lower() != "bearer" or not hmac.compare_digest(
             token.strip().encode(), settings.admin_token.encode()
         ):
+            log.warning("Failed admin authentication from %s", masked_ip_network(ip))
+            if not admin_fail_limiter.hit(ip):
+                return error(429, "rate_limited")
             return error(401, "unauthorized", {"WWW-Authenticate": "Bearer"})
         return None
 

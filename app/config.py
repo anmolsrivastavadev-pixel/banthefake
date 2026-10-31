@@ -44,6 +44,7 @@ class Settings:
     sign_attempt_rate: int = 30  # all petition POSTs (including rejected ones) per hour per IP
     petition_goal: int = 10000
     admin_token: str | None = None
+    admin_fail_rate: int = 10  # failed admin authentications per hour per IP
     model: str = "auto"
     static_dir: Path = Path(__file__).resolve().parent.parent / "static"
 
@@ -63,5 +64,6 @@ class Settings:
             sign_attempt_rate=_int("BTF_SIGN_ATTEMPT_RATE", cls.sign_attempt_rate),
             petition_goal=_int("BTF_PETITION_GOAL", cls.petition_goal),
             admin_token=_admin_token(),
+            admin_fail_rate=_int("BTF_ADMIN_FAIL_RATE", cls.admin_fail_rate),
             model=(os.environ.get("BTF_MODEL") or cls.model).strip().lower(),
         )

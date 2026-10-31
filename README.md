@@ -162,7 +162,8 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_SIGN_RATE` | `5` | Successful petition signatures per **hour** per client IP (honeypot hits count too). Rejected attempts (validation errors, duplicates) do not use this quota. Above it you get 429. |
 | `BTF_SIGN_ATTEMPT_RATE` | `30` | All petition sign attempts, valid or not, per **hour** per client IP. Above this you get 429. |
 | `BTF_PETITION_GOAL` | `10000` | The `goal` returned by `/api/petition/count`. |
-| `BTF_ADMIN_TOKEN` | unset | Bearer token for export and erase. While it is unset, the admin endpoints return 404. |
+| `BTF_ADMIN_TOKEN` | unset | Bearer token for export and erase. It must be at least 24 characters; a shorter or unset token disables the admin endpoints, which then return 404. |
+| `BTF_ADMIN_FAIL_RATE` | `10` | Failed admin authentications allowed per **hour** per client IP. Once the budget is full, all admin requests from that IP return 429 until the window passes, including requests with the correct token. Successful authentication does not use the budget. |
 | `BTF_MODEL` | `auto` | `off`, `0`, `false` or `no` disables the ML detector. Any other value enables it when the `ml` extra is installed. |
 | `BTF_MODEL_ID` | `haywoodsloan/ai-image-detector-deploy` | Primary detector (H): Hugging Face model id or local path. It must be an image-classification model with a single "AI" logit or a fake/real head. |
 | `BTF_MODEL_REVISION` | pinned commit for the default model; unset for a custom model | Exact Hugging Face commit/tag for the primary model. Set this when using a remote custom model so deployments are reproducible. |
@@ -190,8 +191,8 @@ Every response, error responses included, carries a strict CSP, `X-Content-Type-
 | `POST /api/scan` | `multipart/form-data`, field `file` | 200 scan report (below) | 400 (not multipart, no `file` field, empty, malformed or unterminated upload, client disconnected), 413 too large, 415 unsupported type (also audio-only MP4), 429 rate limited, 503 `busy` (no scan slot within `BTF_SCAN_WAIT_S`), 504 `scan_timeout`, 500 `scan_failed` |
 | `POST /api/petition` | `application/json`, at most 16 KB: `{"name", "email", "location"?, "consent": true, "website"?}` | 201 `{"ok": true}` | 400 body is not a JSON object, 409 `already_signed`, 413 body over 16 KB, 415 not `application/json`, 422 validation, 429 rate limited |
 | `GET /api/petition/count` | none | 200 `{"count": int, "goal": int}` | none |
-| `GET /api/petition/export.csv` | admin bearer token | 200 `text/csv` (`name,email,location,created_at`) | 401 wrong or missing token, 404 admin disabled |
-| `DELETE /api/petition` | admin bearer token, `application/json` (at most 16 KB) `{"email": "..."}` | 200 `{"deleted": true}` | 401 wrong or missing token, 404 admin disabled or `not_found`, 413 body over 16 KB, 415 not `application/json`, 422 email missing |
+| `GET /api/petition/export.csv` | admin bearer token | 200 `text/csv` (`name,email,location,created_at`) | 401 wrong or missing token, 404 admin disabled, 429 failed-authentication limit reached |
+| `DELETE /api/petition` | admin bearer token, `application/json` (at most 16 KB) `{"email": "..."}` | 200 `{"deleted": true}` | 401 wrong or missing token, 404 admin disabled or `not_found`, 413 body over 16 KB, 415 not `application/json`, 422 email missing, 429 failed-authentication limit reached |
 
 Notes:
 
@@ -290,7 +291,7 @@ confirmed.
 ### Admin examples
 
 ```bash
-export BTF_ADMIN_TOKEN='a-long-random-secret'   # set the same value on the server
+export BTF_ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"   # save this value
 
 # Export all signatures
 curl -fsS -H "Authorization: Bearer $BTF_ADMIN_TOKEN" \
@@ -311,6 +312,8 @@ curl -fsS -X DELETE -H "Authorization: Bearer $BTF_ADMIN_TOKEN" \
   addresses. IPs are only held in memory by the rate limiter, for its sliding window.
 - **Access logs**: Uvicorn's access log prints client IPs. The Docker image runs with `--no-access-log`. If you
   run Uvicorn yourself, pass that flag too, or configure your reverse proxy's logs to match your privacy policy.
+  Failed admin authentication warnings contain only an IPv4 `/24` or IPv6 `/48` network prefix and never the
+  supplied token.
 - **Third parties**: the page loads Google Fonts (allowed by the CSP). Self-host the fonts if you want no
   third-party requests.
 - **Privacy notice**: `static/privacy.html` describes the behaviour above to visitors and is linked from the
@@ -331,7 +334,7 @@ Fly.io, plus backups, updates and a pre-launch checklist), see [`docs/DEPLOY.md`
 docker build -t banthefake .
 docker run -d --name banthefake -p 8000:8000 \
   -v banthefake-data:/data \
-  -e BTF_ADMIN_TOKEN='a-long-random-secret' \
+  -e BTF_ADMIN_TOKEN='replace-with-at-least-24-random-characters' \
   -e FORWARDED_ALLOW_IPS='10.0.0.2' \
   banthefake
 curl http://127.0.0.1:8000/api/health

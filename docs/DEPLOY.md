@@ -101,6 +101,7 @@ deployment sets or must think about:
 | Variable | Option A (compose) | Option B (Fly) | Notes |
 |---|---|---|---|
 | `BTF_ADMIN_TOKEN` | `.env` | `fly secrets set` | **Required** for export and erase. At least 24 characters, or the admin endpoints stay disabled (404) and an error is logged. |
+| `BTF_ADMIN_FAIL_RATE` | `10` | `10` | Failed admin authentications allowed per client IP per hour. Once full, that IP receives 429 on all admin requests until the window passes. |
 | `FORWARDED_ALLOW_IPS` | fixed in compose: `172.31.250.1` | `fly.toml`: `172.16.0.0/16` (verify) | The address(es) of the proxy only. **Never `*`**: with `*`, uvicorn takes the left-most `X-Forwarded-For` entry, which the client controls. |
 | `BTF_DB_PATH` | `/data/banthefake.db` (on the `btf-data` volume) | `/data/banthefake.db` (on the `btf_data` volume) | Must be on the persistent volume. |
 | `BTF_MODEL_THREADS` | `2` | `2` | Number of vCPUs. |
