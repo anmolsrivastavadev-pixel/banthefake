@@ -109,6 +109,7 @@ deployment sets or must think about:
 | `BTF_MODEL_THREADS` | `2` | `2` | Number of vCPUs. |
 | `BTF_SCAN_CONCURRENCY` | `1` | `1` | Shipped 4 GB profile. Concurrency 2 needs the 8 GB profile described above. |
 | `BTF_MAX_UPLOAD_MB` | `50` | default | With Option A, keep the Caddyfile `request_body max_size` slightly above it. |
+| `BTF_UPLOAD_TIMEOUT_S` | `60` | default | App-side upload fallback. Option A's Caddy `read_body 35s` rejects slower request bodies first. Upload time does not consume `BTF_SCAN_TIMEOUT_S`. |
 | `BTF_PETITION_GOAL` | `.env` | `[env]` | Shown on the site. |
 | `BTF_DOMAIN`, `ACME_EMAIL` | `.env` (Caddy only) | n/a | Domain to serve; ACME account contact. |
 | `BTF_SCAN_ISOLATION`, `BTF_SCAN_MAX_RSS_MB`, `BTF_SCAN_TIMEOUT_S`, ... | defaults | defaults | See the README. Keep isolation on in production. |
@@ -201,8 +202,10 @@ How it fits together:
   is safe on the read-only root filesystem.
 - Both containers prohibit privilege gain. The app drops all capabilities; Caddy drops all capabilities and
   adds back only `NET_BIND_SERVICE` for ports 80 and 443. The app is limited to 4 GiB by the calculation above.
-- Caddy allows 35 seconds to read a request body, slightly above the app's 30-second scan deadline. It is the
-  sole HSTS source on this deployment; leave `BTF_HSTS` unset in `.env`.
+- Caddy allows 35 seconds to read a request body. This is the deployment's primary upload-duration bound; the
+  app's `BTF_UPLOAD_TIMEOUT_S` default of 60 seconds is a fallback for deployments without that proxy rule.
+  Upload receipt and concurrency-queue time do not consume the scan deadline, which starts only after the app
+  acquires a scan slot. Caddy is the sole HSTS source on this deployment; leave `BTF_HSTS` unset in `.env`.
 
 ### A6. Verify client-IP handling
 

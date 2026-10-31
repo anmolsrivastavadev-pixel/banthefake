@@ -29,7 +29,8 @@ def test_dockerfile_has_no_c2pa_fallback():
 def test_readme_documents_new_settings():
     readme = (ROOT / "README.md").read_text()
     for var in (
-        "BTF_SCAN_CONCURRENCY", "BTF_SCAN_WAIT_S", "BTF_SIGN_ATTEMPT_RATE", "BTF_MAX_DECODE_PIXELS",
+        "BTF_UPLOAD_TIMEOUT_S", "BTF_SCAN_CONCURRENCY", "BTF_SCAN_WAIT_S", "BTF_SIGN_ATTEMPT_RATE",
+        "BTF_MAX_DECODE_PIXELS",
         "BTF_CLIENT_IP_HEADER", "BTF_HSTS",
     ):
         assert f"`{var}`" in readme, var

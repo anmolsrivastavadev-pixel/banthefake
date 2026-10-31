@@ -310,7 +310,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/scan")
     async def scan_upload(request: Request):
-        deadline = scan.isolate.deadline_after_timeout()
         cancellation = scan.isolate.CancellationToken()
         if not scan_limiter.hit(client_ip(request)):
             return error(429, "Too many scans. Please wait a minute and try again.")
@@ -321,10 +320,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 try:
                     info = await asyncio.wait_for(
                         receive_file(request, dest, "file", settings.max_upload_bytes),
-                        timeout=scan.isolate.remaining(deadline),
+                        timeout=settings.upload_timeout_s,
                     )
-                except TimeoutError as exc:
-                    raise scan.ScanTimeout("upload exhausted the scan time budget") from exc
+                except TimeoutError:
+                    return error(408, "upload_timeout")
             if info.size == 0:
                 return error(400, "The file is empty.")
             with tmp_path.open("rb") as f:
@@ -334,13 +333,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             _, mime = sniffed
             filename = os.path.basename(info.filename.replace("\\", "/"))[:255]
             # Decoding media and running the model is memory hungry: bound how many run at once.
-            slot_wait = min(settings.scan_wait_s, scan.isolate.remaining(deadline))
-            if slot_wait <= 0:
-                raise scan.ScanTimeout("queue exhausted the scan time budget")
-            if not await scan_slots.acquire(slot_wait):
-                if scan.isolate.remaining(deadline) <= 0:
-                    raise scan.ScanTimeout("queue exhausted the scan time budget")
+            if not await scan_slots.acquire(settings.scan_wait_s):
                 return error(503, "busy", {"Retry-After": "30"})
+            deadline = scan.isolate.deadline_after_timeout()
             context_tokens = scan._set_request_context(deadline, cancellation)
             try:
                 # Context variables propagate into AnyIO's worker thread while preserving the public
@@ -370,8 +365,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             log.exception("scan failed")
             return error(500, "Scan failed.")
         finally:
-            if cancellation.cancelled.is_set():
-                cancellation.cancel()
             tmp_path.unlink(missing_ok=True)
 
     app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="static")

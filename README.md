@@ -147,11 +147,12 @@ All settings are environment variables. The defaults below come from `app/config
 |---|---|---|
 | `BTF_DB_PATH` | `data/banthefake.db` (relative to the working directory). The Docker image sets `/data/banthefake.db` | SQLite file for petition signatures. The parent directory is created if missing. |
 | `BTF_MAX_UPLOAD_MB` | `50` | Maximum upload size. Enforced while streaming, so larger uploads are aborted with 413. |
+| `BTF_UPLOAD_TIMEOUT_S` | `60` | App-side maximum time for receiving and writing an upload. Expiry returns 408 `{"error": "upload_timeout"}` and deletes the partial temp file. The shipped Caddy deployment applies a tighter 35-second request-body timeout. |
 | `BTF_SCAN_RATE` | `10` | Scans per **minute** per client IP. Above this you get 429. |
 | `BTF_SCAN_CONCURRENCY` | `2` | Scans that may decode media and run the model at the same time (bounds memory). Further scans wait for a slot. |
-| `BTF_SCAN_WAIT_S` | `30` | Seconds a scan may wait for a slot before the server answers 503 `{"error": "busy"}` (with `Retry-After`). |
+| `BTF_SCAN_WAIT_S` | `30` | Seconds a fully uploaded scan may wait for a slot before the server answers 503 `{"error": "busy"}` (with `Retry-After`). Queue time is separate from the scan deadline. |
 | `BTF_SCAN_ISOLATION` | `on` | Runs every untrusted-media parser and decoder in spawned worker processes. `off`, `0`, `false` or `no` uses the in-process debugging path. Keep this on in production. |
-| `BTF_SCAN_TIMEOUT_S` | `30` | End-to-end wall-clock budget starting when the scan request begins. It covers upload streaming, queueing, isolated parsing, IPC/frame reconstruction and detector inference. An over-budget parser is killed and replaced, and the API returns 504 `{"error": "scan_timeout"}`. |
+| `BTF_SCAN_TIMEOUT_S` | `30` | Wall-clock scan budget starting after the upload has finished and a concurrency slot is acquired. It covers isolated parsing, parser-pool acquisition, IPC/frame reconstruction and detector inference. An over-budget parser is killed and replaced, and the API returns 504 `{"error": "scan_timeout"}`. |
 | `BTF_SCAN_INFER_RESERVE_S` | `3` | Minimum budget that must remain before a detector call starts. With less time, inference is skipped and the report says the detector could not analyze the file because of the time budget. |
 | `BTF_SCAN_INFER_BATCH` | `2` | Number of sampled frames sent to the detector per call (1–8). The deadline is checked between calls. |
 | `BTF_SCAN_WORKER_JOBS` | `50` | Successful jobs handled by a parser worker before it is recycled. The parser pool size equals `BTF_SCAN_CONCURRENCY`. |
@@ -191,7 +192,7 @@ carries `Strict-Transport-Security: max-age=31536000`.
 | Method and path | Body | Success | Errors |
 |---|---|---|---|
 | `GET /api/health` | none | 200 `{"ok": true, "model": "loaded"\|"degraded"\|"loading"\|"off"\|"unavailable", "c2pa": bool}` (`degraded`: one of the two detector models failed to load) | none |
-| `POST /api/scan` | `multipart/form-data`, field `file` | 200 scan report (below) | 400 (not multipart, no `file` field, empty, malformed or unterminated upload, client disconnected), 413 too large, 415 unsupported type (also audio-only MP4), 429 rate limited, 503 `busy` (no scan slot within `BTF_SCAN_WAIT_S`), 504 `scan_timeout`, 500 `scan_failed` |
+| `POST /api/scan` | `multipart/form-data`, field `file` | 200 scan report (below) | 400 (not multipart, no `file` field, empty, malformed or unterminated upload, client disconnected), 408 `upload_timeout`, 413 too large, 415 unsupported type (also audio-only MP4), 429 rate limited, 503 `busy` (no scan slot within `BTF_SCAN_WAIT_S`), 504 `scan_timeout`, 500 `scan_failed` |
 | `POST /api/petition` | `application/json`, at most 16 KB: `{"name", "email", "location"?, "consent": true, "website"?}` | 201 `{"ok": true}` | 400 body is not a JSON object, 409 `already_signed`, 413 body over 16 KB, 415 not `application/json`, 422 validation, 429 rate limited |
 | `GET /api/petition/count` | none | 200 `{"count": int, "goal": int}` | none |
 | `GET /api/petition/export.csv` | admin bearer token | 200 `text/csv` (`name,email,location,created_at`) | 401 wrong or missing token, 404 admin disabled, 429 failed-authentication limit reached |
@@ -309,8 +310,10 @@ curl -fsS -X DELETE -H "Authorization: Bearer $BTF_ADMIN_TOKEN" \
 ## Privacy
 
 - **Uploads**: each upload is streamed to a temp file, scanned, and deleted in a `finally` block, so it is
-  removed even when the scan fails, its parser crashes, or its deadline expires. Uploads are never stored or
-  logged. Parser workers only read the temporary file. The ML model runs locally, so no third-party API sees it.
+  removed even when upload receipt times out, the scan fails, its parser crashes, or its deadline expires.
+  Upload receipt has its own `BTF_UPLOAD_TIMEOUT_S` bound; the shipped Caddy proxy also enforces `read_body 35s`.
+  Uploads are never stored or logged. Parser workers only read the temporary file. The ML model runs locally,
+  so no third-party API sees it.
 - **Petition**: the server stores name, email, optional location and a UTC timestamp. It does **not** store IP
   addresses. IPs are only held in memory by the rate limiter, for its sliding window.
 - **Access logs**: Uvicorn's access log prints client IPs. The Docker image runs with `--no-access-log`. If you

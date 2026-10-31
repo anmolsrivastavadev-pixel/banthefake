@@ -52,17 +52,21 @@ existing `AI detector could not analyze this file (...)` signal is added. JPEG u
 
 Workers use Python's `spawn` multiprocessing context so they do not inherit parent threads, Torch state, file
 descriptors or partially initialized native libraries. A process-local pool has `BTF_SCAN_CONCURRENCY` workers.
-Each request computes one absolute monotonic deadline from `BTF_SCAN_TIMEOUT_S` (default 30 seconds) before it
-starts reading the upload. The same remaining budget covers upload streaming, the API concurrency slot, parser
-pool acquisition, worker parsing, IPC validation, RGB reconstruction and model inference. Each caller leases
-one worker for one parser job. After `BTF_SCAN_WORKER_JOBS` jobs (default 50), the worker is replaced.
+The parent streams the upload under the separate `BTF_UPLOAD_TIMEOUT_S` limit (default 60 seconds), then waits
+up to `BTF_SCAN_WAIT_S` (default 30 seconds) for an API concurrency slot. Upload timeout returns 408
+`{"error":"upload_timeout"}`; queue timeout returns 503 `{"error":"busy"}` with `Retry-After`. Once a slot is
+acquired, the request computes one absolute monotonic deadline from `BTF_SCAN_TIMEOUT_S` (default 30 seconds).
+That full budget covers parser-pool acquisition, worker parsing, IPC validation, RGB reconstruction and model
+inference. Each caller leases one worker for one parser job. After `BTF_SCAN_WORKER_JOBS` jobs (default 50), the
+worker is replaced.
 
 If the deadline expires, the parent terminates the worker, escalates to a kill if necessary, joins it and creates
 a replacement. The API returns status **504** with `{"error":"scan_timeout"}`. A 504 describes the actual
 boundary: the web server accepted the request but its subordinate parsing service did not finish in time. A 503
-is reserved for the existing concurrency queue exhaustion (`{"error":"busy"}`), which is retryable capacity
-pressure rather than a particular scan exceeding its deadline. Worker exit, malformed IPC and setup failures
-produce a clean 500 `{"error":"scan_failed"}` and also replace the worker. The upload is deleted in every case.
+is reserved for concurrency queue exhaustion (`{"error":"busy"}`), which is retryable capacity pressure rather
+than a particular scan exceeding its deadline. Worker exit, malformed IPC and setup failures produce a clean
+500 `{"error":"scan_failed"}` and also replace the worker. The upload is deleted in every case, including upload
+timeout.
 
 Lease completion, retirement and shutdown change pool state under one lock. A replacement re-checks the closed
 state after process creation and immediately terminates a child spawned during shutdown. A failed replacement

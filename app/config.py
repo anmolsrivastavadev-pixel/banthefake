@@ -41,6 +41,7 @@ def _enabled(name: str) -> bool:
 class Settings:
     db_path: Path = Path("data/banthefake.db")
     max_upload_mb: int = 50
+    upload_timeout_s: float = 60.0  # app fallback; production proxies should enforce a tighter body timeout
     scan_rate: int = 10
     scan_concurrency: int = 2  # scans decoding media at the same time (memory bound)
     scan_wait_s: float = 30.0  # how long a scan may queue for a slot before 503 "busy"
@@ -63,6 +64,7 @@ class Settings:
         return cls(
             db_path=Path(os.environ.get("BTF_DB_PATH") or cls.db_path),
             max_upload_mb=_int("BTF_MAX_UPLOAD_MB", cls.max_upload_mb),
+            upload_timeout_s=_float("BTF_UPLOAD_TIMEOUT_S", cls.upload_timeout_s),
             scan_rate=_int("BTF_SCAN_RATE", cls.scan_rate),
             scan_concurrency=max(1, _int("BTF_SCAN_CONCURRENCY", cls.scan_concurrency)),
             scan_wait_s=_float("BTF_SCAN_WAIT_S", cls.scan_wait_s),

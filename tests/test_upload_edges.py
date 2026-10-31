@@ -5,6 +5,8 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 from tests import media
@@ -18,13 +20,18 @@ def multipart(data: bytes, close: bool = True) -> bytes:
     return head + data + (f"\r\n--{BOUNDARY}--\r\n".encode() if close else b"")
 
 
-def asgi_call(app, method, path, headers, chunks):
-    """Drive the ASGI app directly: send `chunks` (more_body=True), then an http.disconnect."""
+def asgi_call(app, method, path, headers, chunks, delay_s=0.0, complete=False):
+    """Drive the ASGI app directly, optionally delaying chunks or completing instead of disconnecting."""
     sent: list[dict] = []
     queue = [{"type": "http.request", "body": c, "more_body": True} for c in chunks]
-    queue.append({"type": "http.disconnect"})
+    if complete:
+        queue[-1]["more_body"] = False
+    else:
+        queue.append({"type": "http.disconnect"})
 
     async def receive():
+        if delay_s:
+            await asyncio.sleep(delay_s)
         return queue.pop(0) if queue else {"type": "http.disconnect"}
 
     async def send(message):
@@ -68,6 +75,50 @@ def test_multipart_with_closing_boundary_ok(client):
     res = client.post("/api/scan", content=multipart(media.png()),
                       headers={"Content-Type": f"multipart/form-data; boundary={BOUNDARY}"})
     assert res.status_code == 200
+
+
+def test_slow_upload_does_not_consume_scan_budget(make_client, monkeypatch):
+    monkeypatch.setenv("BTF_SCAN_TIMEOUT_S", "0.05")
+    monkeypatch.setattr("app.scan.scan_file", lambda path, filename, mime: {"verdict": "unknown"})
+    body = multipart(media.png())
+    chunks = [body[:80], body[80:160], body[160:]]
+    started = time.monotonic()
+    sent = asgi_call(
+        make_client(upload_timeout_s=1).app,
+        "POST",
+        "/api/scan",
+        {"content-type": f"multipart/form-data; boundary={BOUNDARY}"},
+        chunks,
+        delay_s=0.03,
+        complete=True,
+    )
+    assert time.monotonic() - started > 0.05
+    assert sent[0]["status"] == 200
+
+
+def test_upload_timeout_408_and_deletes_temp_file(make_client, monkeypatch):
+    created = []
+    real_mkstemp = tempfile.mkstemp
+
+    def tracked_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        created.append(Path(name))
+        return fd, name
+
+    monkeypatch.setattr("app.main.tempfile.mkstemp", tracked_mkstemp)
+    body = multipart(media.png())
+    sent = asgi_call(
+        make_client(upload_timeout_s=0.01).app,
+        "POST",
+        "/api/scan",
+        {"content-type": f"multipart/form-data; boundary={BOUNDARY}"},
+        [body],
+        delay_s=0.03,
+        complete=True,
+    )
+    assert sent[0]["status"] == 408
+    assert b'"error":"upload_timeout"' in sent[1]["body"]
+    assert created and all(not path.exists() for path in created)
 
 
 def test_audio_only_mp4_415(client):

@@ -33,6 +33,8 @@ All JSON. Errors: `{"error": "<message>"}` with proper status code.
 
 ### `POST /api/scan` (multipart, field `file`)
 - Max size `BTF_MAX_UPLOAD_MB` (default 50) → 413 when exceeded (enforce while streaming, not after).
+- Upload receipt is bounded by `BTF_UPLOAD_TIMEOUT_S` (default 60 s) → 408 `{"error": "upload_timeout"}`;
+  the partial temp file is deleted. Production Caddy applies a tighter 35 s request-body timeout.
 - Accept only images (jpeg, png, webp, gif, heic/heif if Pillow can open) and video (mp4, mov, webm). Sniff
   magic bytes; never trust the client content-type alone → 415 otherwise.
 - Upload written to a temp file, always deleted after scan (even on error). Never persisted or logged.
@@ -40,9 +42,10 @@ All JSON. Errors: `{"error": "<message>"}` with proper status code.
 - All byte interpretation (marker scanning, Pillow/EXIF/XMP/PNG, PyAV and C2PA) runs in a spawned parser
   worker by default (`BTF_SCAN_ISOLATION=on`). The pool size equals `BTF_SCAN_CONCURRENCY`; workers recycle
   after `BTF_SCAN_WORKER_JOBS` (default 50).
-- Parser jobs have a hard `BTF_SCAN_TIMEOUT_S` deadline (default 30 s). Timeout kills and replaces the worker
-  and returns 504 `{"error": "scan_timeout"}`; a worker crash returns 500 `{"error": "scan_failed"}` and the
-  pool recovers. The route's `finally` still deletes the upload.
+- A fully received upload waits at most `BTF_SCAN_WAIT_S` for an API scan slot, then returns 503 `busy`. After
+  acquiring the slot, the parser job gets a fresh hard `BTF_SCAN_TIMEOUT_S` deadline (default 30 s). Timeout
+  kills and replaces the worker and returns 504 `{"error": "scan_timeout"}`; a worker crash returns 500
+  `{"error": "scan_failed"}` and the pool recovers. The route's `finally` still deletes the upload.
 - Workers apply `RLIMIT_AS`/RSS, CPU, file-size and descriptor limits plus bounded pixel/frame/IPC budgets.
   Non-JPEG images above `BTF_MAX_DECODE_PIXELS` keep metadata/C2PA results but are not pixel-decoded for the
   model. JPEG uses libjpeg shrink-on-load.

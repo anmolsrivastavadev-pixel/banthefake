@@ -7,7 +7,7 @@
 	email {$ACME_EMAIL}
 	servers {
 		timeouts {
-			# Slightly above the app's default 30 s end-to-end scan deadline.
+			# Primary upload-duration bound; the app has a 60 s fallback (BTF_UPLOAD_TIMEOUT_S).
 			read_body 35s
 		}
 	}
