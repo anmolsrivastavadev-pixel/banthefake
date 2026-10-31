@@ -69,7 +69,7 @@ section { padding: 96px 0; border-top: 1px solid var(--line); }
 /* Scanner */
 .scanner { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 @media (max-width: 860px) { .scanner { grid-template-columns: 1fr; } }
-.drop { border: 2px dashed var(--line-strong); border-radius: 14px; background: var(--bg-2); min-height: 320px; display: grid; place-items: center; text-align: center; padding: 28px; cursor: pointer; transition: border-color .2s, background .2s; position: relative; }
+.drop { border: 2px dashed var(--line-strong); border-radius: 14px; background: var(--bg-2); min-height: 320px; display: grid; place-items: center; text-align: center; padding: 28px; cursor: pointer; transition: border-color .2s, background .2s; position: sticky; top: 84px; align-self: start; }
 .drop.over { border-color: var(--red); background: var(--red-soft); }
 .drop input { display: none; }
 .drop .big { font: 600 20px var(--font-display); margin-bottom: 6px; }

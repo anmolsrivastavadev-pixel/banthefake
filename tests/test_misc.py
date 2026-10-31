@@ -15,7 +15,9 @@ def test_static_and_security_headers(client):
     assert res.headers["x-frame-options"] == "DENY"
     assert "referrer-policy" in res.headers
     assert client.get("/app.js").status_code == 200
-    assert client.get("/styles.css").status_code == 200
+    css = client.get("/styles.css")
+    assert css.status_code == 200
+    assert css.headers["cache-control"] == "no-cache"
 
 
 def test_unknown_api_route_json_error(client):

@@ -79,6 +79,8 @@ class SecurityHeadersMiddleware:
                 headers = MutableHeaders(scope=message)
                 for key, value in SECURITY_HEADERS.items():
                     headers.setdefault(key, value)
+                # Revalidate (via ETag) on every load so a deploy never leaves visitors on stale JS/CSS.
+                headers.setdefault("Cache-Control", "no-cache")
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
