@@ -33,11 +33,13 @@ const TAGS = {
   model: ['model', 'MODEL'],
   info: ['info', 'INFO'],
 };
-const VERDICT_CLASS = { ai: 'warn', edited: 'caution', camera: 'ok', unknown: '' };
+// Camera data is not proof a file is real, so that verdict is styled neutrally, never as a green "all clear".
+const VERDICT_CLASS = { ai: 'warn', edited: 'caution', camera: 'neutral', unknown: '' };
 const SCAN_ERRORS = {
   413: ['File too large', 'This file is over the upload limit. Try a smaller file or a shorter clip.'],
   415: ['Unsupported file', 'We can only scan JPG, PNG, WEBP, GIF, MP4, MOV and WEBM files.'],
   429: ['Slow down', 'Too many scans from your connection. Please wait a minute and try again.'],
+  503: ['Scanner busy', 'The scanner is handling other files right now. Please try again in a moment.'],
 };
 
 let scanSeq = 0;
@@ -143,6 +145,7 @@ function modelBlock(m) {
     ['Model', m.name],
     ['Estimate', `${pct(p)}% · ${reading}`],
     ['Frames checked', m.frames_checked > 1 ? String(m.frames_checked) : ''],
+    ['Video covered', m.coverage ? `${m.coverage.first_s.toFixed(1)} s to ${m.coverage.last_s.toFixed(1)} s${m.coverage.duration_s ? ` of ${m.coverage.duration_s.toFixed(1)} s` : ''}` : ''],
   ]);
   b.append(meter(p, 'Estimated chance this is AI-generated'));
   if (Array.isArray(m.frame_probabilities) && m.frame_probabilities.length > 1) {

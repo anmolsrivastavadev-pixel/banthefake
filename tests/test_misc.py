@@ -23,3 +23,18 @@ def test_unknown_api_route_json_error(client):
     assert res.status_code == 404
     assert "error" in res.json()
     assert "x-frame-options" in res.headers
+
+
+def test_camera_verdict_is_not_styled_green(client):
+    """Camera EXIF can be faked or copied: the UI must not present it as a green all-clear."""
+    import re
+
+    js = client.get("/app.js").text
+    css = client.get("/styles.css").text
+    cls = re.search(r"VERDICT_CLASS = \{[^}]*camera: '([^']*)'", js).group(1)
+    assert cls == "neutral"
+    rules = " ".join(re.findall(rf"\.verdict\.{cls}[^{{]*\{{[^}}]*\}}", css))
+    assert rules and "green" not in rules
+    cam_tag = re.search(r"\.tag\.cam\s*\{[^}]*\}", css).group(0)
+    assert "green" not in cam_tag
+    assert not re.search(r"\.verdict\.ok[^{]*\{[^}]*green", css)
