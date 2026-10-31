@@ -61,7 +61,7 @@
       <p>The letter is built in your browser. The name and town you type into it are never sent to our server.</p>
 
       <h2>IP addresses and logs</h2>
-      <p>To stop abuse, the server limits how many scans and petition signatures can come from one IP address. It keeps recent IP addresses in memory only, for about as long as the limit's time window (up to one hour), and then discards them. They are never written to disk or to the database, and they are cleared when the server restarts.</p>
+      <p>To stop abuse, the server limits how many scans and petition signatures can come from one IP address. It keeps recent IP addresses in memory only, for up to about an hour after your last scan or signature attempt (the longest limit window is one hour; expired addresses are removed within a minute after that), and then discards them. They are never written to disk or to the database, and they are cleared when the server restarts.</p>
       <p>The standard BanTheFake server setup turns off web access logs, so visits are not logged by the app. If this site runs behind a hosting provider or proxy, that service may keep its own logs. Email us to ask what applies to this site.</p>
 
       <h2>Third parties</h2>

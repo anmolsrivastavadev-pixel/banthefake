@@ -1,8 +1,12 @@
 # syntax=docker/dockerfile:1
 # BanTheFake: FastAPI app + two CPU-only AI-image detectors, runs offline at runtime.
-FROM python:3.12-slim
+# Base images are pinned by multi-arch index digest (linux/amd64 + linux/arm64); the tag is informational.
+# To update: look up the new index digest for the tag and replace both the tag comment and the digest.
+# python:3.12-slim
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+# ghcr.io/astral-sh/uv:0.12.5
+COPY --from=ghcr.io/astral-sh/uv:0.12.5@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 /uv /uvx /usr/local/bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -29,12 +33,24 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --extra ml --no-install-project $skip; \
     /app/.venv/bin/python -c "from c2pa import Context, Reader; print('c2pa ok')"
 
-# 2) CPU-only torch, same version as the lockfile. Its dependencies were installed in step 1.
+# 2) CPU-only torch, same version as the lockfile, hash-pinned (download.pytorch.org is not covered by
+#    uv.lock). Its dependencies were installed in step 1. The hashes are the cp312 manylinux_2_28 wheels
+#    from https://download.pytorch.org/whl/cpu/torch/ for x86_64 and aarch64; when uv.lock moves torch,
+#    the version check below fails the build until TORCH_CPU_VERSION and both hashes are updated.
+ARG TORCH_CPU_VERSION=2.15.0
 RUN --mount=type=cache,target=/root/.cache/uv \
     set -eu; \
     torch_version=$(sed -n '/^name = "torch"$/{n;s/^version = "\(.*\)"$/\1/p;}' uv.lock); \
-    uv pip install --python /app/.venv/bin/python --no-deps \
-        --index-url https://download.pytorch.org/whl/cpu "torch==${torch_version}"; \
+    if [ "$torch_version" != "$TORCH_CPU_VERSION" ]; then \
+        echo "uv.lock has torch $torch_version but the Dockerfile pins CPU wheels for $TORCH_CPU_VERSION" >&2; exit 1; \
+    fi; \
+    echo "torch==${TORCH_CPU_VERSION}+cpu" \
+        "--hash=sha256:0955c7e3446326293f48af18fad67872fa31dee5a36a87690eb9e5be8b465be3" \
+        "--hash=sha256:75941d429aaf4450bcd364345d7677e2d54aad45b38fbfcb1c0552450a6e9c40" \
+        > /tmp/torch-cpu.txt; \
+    uv pip install --python /app/.venv/bin/python --no-deps --require-hashes \
+        --index-url https://download.pytorch.org/whl/cpu -r /tmp/torch-cpu.txt; \
+    rm /tmp/torch-cpu.txt; \
     /app/.venv/bin/python -c "import torch; assert not torch.cuda.is_available(); print('torch', torch.__version__)"
 
 # 3) Bake BOTH detector weights into the image so the container never needs the network.

@@ -15,9 +15,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
+          version: "0.12.5"
           enable-cache: true
       - run: uv sync --frozen
       - run: uv run pytest -q
@@ -31,9 +32,10 @@ jobs:
       BTF_MODEL2_REVISION: ac6ee457bea904a373065754107451793b56db00
       HF_HOME: ${{ github.workspace }}/.cache/huggingface
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
+          version: "0.12.5"
           enable-cache: true
       - name: Install ML dependencies with CPU-only Torch
         shell: bash
@@ -45,12 +47,18 @@ jobs:
           done < <(sed -nE 's/^name = "((nvidia-|cuda-)[^"]+|triton)"$/\1/p' uv.lock)
           uv sync --frozen --extra ml "${skip[@]}"
 
+          # Same hash-pinned CPU wheel as the Dockerfile (keep TORCH_CPU_VERSION and the hash in sync).
           torch_version=$(sed -n '/^name = "torch"$/{n;s/^version = "\(.*\)"$/\1/p;}' uv.lock)
-          uv pip install --python .venv/bin/python --no-deps \
-            --index-url https://download.pytorch.org/whl/cpu "torch==${torch_version}"
+          if [ "$torch_version" != "2.15.0" ]; then
+            echo "uv.lock has torch $torch_version; update the pinned CPU wheel hash here and in the Dockerfile" >&2
+            exit 1
+          fi
+          echo "torch==2.15.0+cpu --hash=sha256:0955c7e3446326293f48af18fad67872fa31dee5a36a87690eb9e5be8b465be3" > "$RUNNER_TEMP/torch-cpu.txt"
+          uv pip install --python .venv/bin/python --no-deps --require-hashes \
+            --index-url https://download.pytorch.org/whl/cpu -r "$RUNNER_TEMP/torch-cpu.txt"
           .venv/bin/python -c "import torch; assert not torch.cuda.is_available(); print('torch', torch.__version__)"
       - name: Cache detector weights (both models)
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ env.HF_HOME }}
           key: hf-${{ runner.os }}-${{ env.BTF_MODEL_ID }}-${{ env.BTF_MODEL_REVISION }}-${{ env.BTF_MODEL2_ID }}-${{ env.BTF_MODEL2_REVISION }}
@@ -70,10 +78,10 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           load: true

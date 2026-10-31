@@ -56,12 +56,22 @@ def _txt(key: str, kind: HitKind, pattern: str, text: str, weight: float, flags:
 # declarations are therefore matched only after the format parser identifies their metadata property.
 RAW_MARKERS: list[_Marker] = []
 
-A1111_RE = re.compile(
-    rb"(?s).+\nSteps:\s*\d+,\s*Sampler:\s*[^,\n]+,.*?CFG scale:\s*[\d.]+,.*?Seed:\s*\d+"
-)
-COMFY_RE = re.compile(
-    rb'"class_type"\s*:\s*"[A-Za-z]+[^"]*".{0,400}?"inputs"|"inputs".{0,4000}?"class_type"\s*:', re.S
-)
+# Stable Diffusion WebUI (A1111/Forge) settings: "<prompt>\nSteps: N, Sampler: X, ... CFG scale: N, ... Seed: N".
+# Matched in three linear-time stages (see _a1111_match) instead of one regex with `.+`/`.*?` gaps,
+# which backtracked catastrophically on long non-matching values. No pattern below has nested or
+# overlapping quantifiers: every repeated class is disjoint from what follows it.
+# `Sampler:(?:\s*\n)?[^,\n]+,` is the old `Sampler:\s*[^,\n]+,` without its quadratic split of a long
+# whitespace run between \s* and [^,\n]+ (both match spaces): any leading whitespace up to the last
+# newline goes to the optional group, the rest of the line to [^,\n]+.
+A1111_HEAD_RE = re.compile(rb"\nSteps:\s*\d+,\s*Sampler:(?:\s*\n)?[^,\n]+,")
+A1111_CFG_RE = re.compile(rb"CFG scale:\s*[\d.]+,")
+A1111_SEED_RE = re.compile(rb"Seed:\s*\d")
+# ComfyUI API/workflow JSON: a node's "class_type" near its "inputs" (either order).
+COMFY_CLASS_RE = re.compile(rb'"class_type"\s*:\s*"[A-Za-z][^"]*"')
+COMFY_INPUTS = b'"inputs"'
+COMFY_CLASS_KEY_RE = re.compile(rb'"class_type"\s*:')
+COMFY_GAP_AFTER_CLASS = 400  # max bytes between a class_type value and a following "inputs"
+COMFY_GAP_AFTER_INPUTS = 4000  # max bytes between "inputs" and a following "class_type":
 
 # Hints that C2PA data is present (used only if the C2PA reader is unavailable or fails).
 C2PA_HINT = re.compile(rb"jumb.{0,64}?c2pa|c2pa\.(?:claim|signature|actions)", re.S)
@@ -134,19 +144,53 @@ def scan_generator_metadata(data: bytes, field: str, key: str) -> list[Hit]:
     lower = key.lower()
     if lower not in {"parameters", "prompt", "workflow", "usercomment"}:
         return []
-    if A1111_RE.search(data):
-        match = A1111_RE.search(data)
-        assert match is not None
-        snippet = _snippet(data[match.start():].decode("utf-8", "replace"), 0)
+    start = _a1111_match(data)
+    if start is not None:
+        snippet = _snippet(data[start:].decode("utf-8", "replace"), 0)
         return [Hit("ai", "sd_params", _describe("Stable Diffusion generation settings found", field, snippet),
                     1.0, field, snippet)]
-    if lower in {"prompt", "workflow"} and COMFY_RE.search(data):
-        match = COMFY_RE.search(data)
-        assert match is not None
-        snippet = _snippet(data[match.start():].decode("utf-8", "replace"), 0)
-        return [Hit("ai", "comfyui", _describe("ComfyUI workflow embedded in the file", field, snippet),
-                    1.0, field, snippet)]
+    if lower in {"prompt", "workflow"}:
+        start = _comfy_match(data)
+        if start is not None:
+            snippet = _snippet(data[start:].decode("utf-8", "replace"), 0)
+            return [Hit("ai", "comfyui", _describe("ComfyUI workflow embedded in the file", field, snippet),
+                        1.0, field, snippet)]
     return []
+
+
+def _a1111_match(data: bytes) -> int | None:
+    """Start of an A1111 parameters block (the prompt, i.e. 0) or None. Linear time.
+
+    Same language as the former `(?s).+\\nSteps:\\s*\\d+,\\s*Sampler:\\s*[^,\\n]+,.*?CFG scale:\\s*[\\d.]+,.*?Seed:\\s*\\d+`:
+    a non-empty prompt, a "Steps: N, Sampler: X," line, then "CFG scale: N," and later "Seed: N". The
+    earliest header, then the earliest CFG after it, then any Seed after that is a match iff one exists.
+    """
+    head = A1111_HEAD_RE.search(data, 1)  # pos 1: the prompt before "\nSteps:" must be non-empty
+    if head is None:
+        return None
+    cfg = A1111_CFG_RE.search(data, head.end())
+    if cfg is None or A1111_SEED_RE.search(data, cfg.end()) is None:
+        return None
+    return 0
+
+
+def _comfy_match(data: bytes) -> int | None:
+    """Start of the first ComfyUI node marker or None. Linear time (bounded windows, C-level find)."""
+    best: int | None = None
+    # "class_type": "Name" ... (at most 400 bytes) ... "inputs"
+    for m in COMFY_CLASS_RE.finditer(data):
+        if data.find(COMFY_INPUTS, m.end(), m.end() + COMFY_GAP_AFTER_CLASS + len(COMFY_INPUTS)) != -1:
+            best = m.start()
+            break
+    # "inputs" ... (at most 4000 bytes) ... "class_type":  -- searched from the class_type side, one
+    # bounded C-level find per key, so many "inputs" keys without a class_type cost nothing extra.
+    for m in COMFY_CLASS_KEY_RE.finditer(data):
+        lo = max(0, m.start() - COMFY_GAP_AFTER_INPUTS - len(COMFY_INPUTS))
+        i = data.find(COMFY_INPUTS, lo, m.start())
+        if i != -1:
+            best = i if best is None else min(best, i)
+            break
+    return best
 
 
 def scan_raw(path: str | Path) -> list[Hit]:

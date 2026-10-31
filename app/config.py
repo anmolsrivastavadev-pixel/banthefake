@@ -1,6 +1,26 @@
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+log = logging.getLogger("banthefake")
+
+MIN_ADMIN_TOKEN_LEN = 24
+
+
+def _admin_token() -> str | None:
+    """BTF_ADMIN_TOKEN, or None (admin endpoints disabled, 404) if it is unset or too short to resist guessing."""
+    token = (os.environ.get("BTF_ADMIN_TOKEN") or "").strip()
+    if not token:
+        return None
+    if len(token) < MIN_ADMIN_TOKEN_LEN:
+        log.error(
+            "BTF_ADMIN_TOKEN is shorter than %d characters: admin endpoints are DISABLED. "
+            "Generate one with: python -c 'import secrets; print(secrets.token_urlsafe(32))'",
+            MIN_ADMIN_TOKEN_LEN,
+        )
+        return None
+    return token
 
 
 def _int(name: str, default: int) -> int:
@@ -42,6 +62,6 @@ class Settings:
             sign_rate=_int("BTF_SIGN_RATE", cls.sign_rate),
             sign_attempt_rate=_int("BTF_SIGN_ATTEMPT_RATE", cls.sign_attempt_rate),
             petition_goal=_int("BTF_PETITION_GOAL", cls.petition_goal),
-            admin_token=os.environ.get("BTF_ADMIN_TOKEN") or None,
+            admin_token=_admin_token(),
             model=(os.environ.get("BTF_MODEL") or cls.model).strip().lower(),
         )

@@ -25,6 +25,11 @@ MAX_DECODE_PIXELS = int(os.environ.get("BTF_MAX_DECODE_PIXELS") or 25_000_000)
 MAX_TEXT = 64 * 1024  # cap per metadata text value
 MAX_PNG_TEXT_CHUNKS = 2000  # text chunks read per PNG
 MAX_PNG_TEXT_TOTAL = 4 * 1024 * 1024  # total decoded PNG text kept
+# Chunk-table limits: a 50 MB upload of empty 12-byte chunks is ~4 million chunks. Real PNGs have a few
+# dozen (large ones a few thousand IDAT chunks). Above either limit the file is treated as damaged.
+MAX_PNG_CHUNKS = 10_000
+MAX_PNG_METADATA_BYTES = 16 * 1024 * 1024  # total bytes of ancillary (non-IHDR/PLTE/IDAT/IEND) chunks
+PNG_CRITICAL_TYPES = (b"IHDR", b"PLTE", b"IDAT", b"IEND")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PNG_TEXT_TYPES = (b"tEXt", b"zTXt", b"iTXt")
 
@@ -33,9 +38,11 @@ CAMERA_DETAIL_TAGS = (T.ExposureTime, T.FNumber, T.ISOSpeedRatings, T.FocalLengt
 # XMP properties that name the creating software. Free-text properties (dc:description, dc:title,
 # photoshop:Headline, dc:rights...) are deliberately not read: a caption mentioning "Midjourney" says
 # nothing about how the file was made.
+# Values are bounded ({0,1024}) so a long packet with an unterminated value cannot make findall rescan
+# the rest of the text for every property name (quadratic time). Real tool names are far shorter.
 XMP_TOOL_RE = re.compile(
     r"(xmp:CreatorTool|stEvt:softwareAgent|tiff:Software|exif:Software|pdf:Producer)"
-    r"\s*(?:=\s*\"([^\"]*)\"|>([^<]*)<)",
+    r"(?:\s*=\s*\"([^\"]{0,1024})\"|\s*>([^<]{0,1024})<)",
 )
 XMP_FIELDS = {
     "xmp:CreatorTool": "XMP CreatorTool",
@@ -46,15 +53,21 @@ XMP_FIELDS = {
 }
 # PNG text keys written by AI generators (A1111/Forge "parameters", ComfyUI "prompt"/"workflow",
 # NovelAI and others "Software"). Other keys (Title, Description, Comment, Author...) are free text.
+# Bounded like XMP_TOOL_RE; the leading \s* is inside the first two alternatives only, so it cannot
+# trade characters with the attribute scan of the third ([^>]{0,1024}).
 XMP_DST_RE = re.compile(
-    r"(?:Iptc4xmpExt|photoshop):DigitalSourceType\s*"
-    r"(?:=\s*\"([^\"]*)\"|>([^<]*)<|[^>]*rdf:resource=\"([^\"]*)\")"
+    r"(?:Iptc4xmpExt|photoshop):DigitalSourceType"
+    r"(?:\s*=\s*\"([^\"]{0,1024})\"|\s*>([^<]{0,1024})<|[^>]{0,1024}rdf:resource=\"([^\"]{0,1024})\")"
 )
 SKIP_INFO_KEYS = {"exif", "icc_profile", "xmp", "XML:com.adobe.xmp", "photoshop", "adobe", "jfif_unit"}
 
 
 class ImageTooLarge(Exception):
     pass
+
+
+class PngChunkLimit(ValueError):
+    """The PNG chunk table exceeds MAX_PNG_CHUNKS or MAX_PNG_METADATA_BYTES; the file is treated as damaged."""
 
 
 class DecodeFailed(Exception):
@@ -137,6 +150,12 @@ def extract(path: str | Path) -> ImageMeta:
     """Read metadata without decoding pixels. Raises ImageTooLarge for oversized images."""
     meta = ImageMeta()
     png = _is_png(path)
+    if png and (problem := png_chunk_problem(path)):
+        # Damaged/hostile chunk table: do not hand it to Pillow or our text reader. The scan reports the
+        # file as undecodable (an info note) and still checks its raw bytes.
+        meta.format = "PNG"
+        meta.error = f"PngChunkLimit: {problem}"
+        return meta
     try:
         im = _open(path, strip_png_text=False)
     except ImageTooLarge:
@@ -234,7 +253,10 @@ def _decode(path: str | Path, max_side: int, tolerant: bool) -> tuple[Image.Imag
         old = ImageFile.LOAD_TRUNCATED_IMAGES
         ImageFile.LOAD_TRUNCATED_IMAGES = tolerant and not jpeg
         try:
-            im = _open(path, strip_png_text=tolerant and _is_png(path), pad_jpeg=tolerant and jpeg)
+            png = _is_png(path)
+            if png and (problem := png_chunk_problem(path)):
+                raise DecodeFailed(f"the PNG file is damaged ({problem})")
+            im = _open(path, strip_png_text=tolerant and png, pad_jpeg=tolerant and jpeg)
             with im:
                 check_size(im)
                 w, h = im.size
@@ -348,30 +370,59 @@ def _is_jpeg(path: str | Path) -> bool:
 
 
 def _png_chunks(f):
-    """Yield (type, data_offset, length) for each PNG chunk; stops at IEND or at a truncated header."""
+    """Yield (type, data_offset, length) for each PNG chunk, streaming (constant memory).
+
+    Stops at IEND, at a truncated header, or after yielding a chunk whose declared length runs past the
+    end of the file (truncated files are still decoded tolerantly). Raises PngChunkLimit when the file
+    has more than MAX_PNG_CHUNKS chunks or more than MAX_PNG_METADATA_BYTES of ancillary chunk data.
+    """
+    size = os.fstat(f.fileno()).st_size
     f.seek(len(PNG_SIGNATURE))
+    count = 0
+    metadata = 0
     while True:
         header = f.read(8)
         if len(header) < 8:
             return
         length, kind = struct.unpack(">I4s", header)
+        count += 1
+        if count > MAX_PNG_CHUNKS:
+            raise PngChunkLimit(f"more than {MAX_PNG_CHUNKS} PNG chunks")
         offset = f.tell()
+        if kind not in PNG_CRITICAL_TYPES:
+            metadata += min(length, max(0, size - offset))
+            if metadata > MAX_PNG_METADATA_BYTES:
+                raise PngChunkLimit(f"more than {MAX_PNG_METADATA_BYTES} bytes of PNG metadata chunks")
         yield kind, offset, length
-        if kind == b"IEND":
+        end = offset + length + 4  # data + CRC
+        if kind == b"IEND" or length > 0x7FFFFFFF or end > size:
             return
-        f.seek(offset + length + 4)
+        f.seek(end)
+
+
+def png_chunk_problem(path: str | Path) -> str | None:
+    """Why the PNG's chunk table is unsafe to process (too many chunks / too much metadata), or None."""
+    try:
+        with open(path, "rb") as f:
+            for _ in _png_chunks(f):
+                pass
+    except PngChunkLimit as exc:
+        return str(exc)
+    return None
 
 
 def _png_without_text(path: str | Path) -> bytes:
-    """A copy of the PNG without its tEXt/zTXt/iTXt chunks (text is read separately by _png_text_chunks)."""
+    """A copy of the PNG without its tEXt/zTXt/iTXt chunks (text is read separately by _png_text_chunks).
+
+    Streams the chunk table (never materializes it); raises PngChunkLimit for oversized tables."""
     out = io.BytesIO()
     out.write(PNG_SIGNATURE)
-    with open(path, "rb") as f:
-        for kind, offset, length in list(_png_chunks(f)):
+    with open(path, "rb") as src, open(path, "rb") as f:
+        for kind, offset, length in _png_chunks(f):
             if kind in PNG_TEXT_TYPES:
                 continue
-            f.seek(offset - 8)
-            out.write(f.read(length + 12))
+            src.seek(offset - 8)
+            out.write(src.read(length + 12))
     return out.getvalue()
 
 
@@ -384,37 +435,46 @@ def _inflate(data: bytes, limit: int = MAX_TEXT) -> bytes:
 
 
 def _png_text_chunks(path: str | Path) -> dict[str, str]:
-    """All PNG text chunks (also those after the image data), each value capped at MAX_TEXT characters."""
+    """All PNG text chunks (also those after the image data), each value capped at MAX_TEXT characters.
+
+    Stops quietly at the chunk-table limits (extract() reports such files as damaged)."""
     texts: dict[str, str] = {}
     total = 0
-    with open(path, "rb") as f:
-        count = 0
-        for kind, offset, length in _png_chunks(f):
-            if kind not in PNG_TEXT_TYPES:
-                continue
-            count += 1
-            if count > MAX_PNG_TEXT_CHUNKS or total > MAX_PNG_TEXT_TOTAL:
-                break
-            f.seek(offset)
-            data = f.read(min(length, 4 * MAX_TEXT + 1024))
-            key, _, rest = data.partition(b"\0")
-            if not key or len(key) > 79:
-                continue
-            if kind == b"tEXt":
-                value = rest[:MAX_TEXT].decode("latin-1")
-            elif kind == b"zTXt":
-                value = _inflate(rest[1:]).decode("latin-1") if rest[:1] == b"\0" else ""
-            else:  # iTXt: flag, method, language\0, translated keyword\0, text
-                if len(rest) < 2:
+    count = 0
+    with open(path, "rb") as src, open(path, "rb") as f:
+        try:
+            for kind, offset, length in _png_chunks(f):
+                if kind not in PNG_TEXT_TYPES:
                     continue
-                compressed, body = rest[0], rest[2:]
-                parts = body.split(b"\0", 2)
-                if len(parts) < 3:
-                    continue
-                raw = _inflate(parts[2]) if compressed else parts[2][:MAX_TEXT]
-                value = raw.decode("utf-8", "replace")
-            name = key.decode("latin-1")
-            if value and name not in texts:
-                texts[name] = value
-                total += len(value)
+                count += 1
+                if count > MAX_PNG_TEXT_CHUNKS or total > MAX_PNG_TEXT_TOTAL:
+                    break
+                src.seek(offset)
+                parsed = _png_text_value(kind, src.read(min(length, 4 * MAX_TEXT + 1024)))
+                if parsed and parsed[0] not in texts:
+                    texts[parsed[0]] = parsed[1]
+                    total += len(parsed[1])
+        except PngChunkLimit:
+            pass
     return texts
+
+
+def _png_text_value(kind: bytes, data: bytes) -> tuple[str, str] | None:
+    """(key, value) of one tEXt/zTXt/iTXt chunk, or None if it is malformed or empty."""
+    key, _, rest = data.partition(b"\0")
+    if not key or len(key) > 79:
+        return None
+    if kind == b"tEXt":
+        value = rest[:MAX_TEXT].decode("latin-1")
+    elif kind == b"zTXt":
+        value = _inflate(rest[1:]).decode("latin-1") if rest[:1] == b"\0" else ""
+    else:  # iTXt: flag, method, language\0, translated keyword\0, text
+        if len(rest) < 2:
+            return None
+        compressed, body = rest[0], rest[2:]
+        parts = body.split(b"\0", 2)
+        if len(parts) < 3:
+            return None
+        raw = _inflate(parts[2]) if compressed else parts[2][:MAX_TEXT]
+        value = raw.decode("utf-8", "replace")
+    return (key.decode("latin-1"), value) if value else None
