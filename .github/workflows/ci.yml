@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run pytest -q
+
+  test-ml:
+    runs-on: ubuntu-latest
+    env:
+      BTF_MODEL_ID: buildborderless/CommunityForensics-DeepfakeDet-ViT
+      HF_HOME: ${{ github.workspace }}/.cache/huggingface
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install ML dependencies with CPU-only Torch
+        shell: bash
+        run: |
+          set -euo pipefail
+          skip=(--no-install-package torch)
+          while IFS= read -r package; do
+            skip+=(--no-install-package "$package")
+          done < <(sed -nE 's/^name = "((nvidia-|cuda-)[^"]+|triton)"$/\1/p' uv.lock)
+          uv sync --frozen --extra ml "${skip[@]}"
+
+          torch_version=$(sed -n '/^name = "torch"$/{n;s/^version = "\(.*\)"$/\1/p;}' uv.lock)
+          uv pip install --python .venv/bin/python --no-deps \
+            --index-url https://download.pytorch.org/whl/cpu "torch==${torch_version}"
+          .venv/bin/python -c "import torch; assert not torch.cuda.is_available(); print('torch', torch.__version__)"
+      - name: Cache detector weights
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.HF_HOME }}
+          key: hf-${{ runner.os }}-${{ env.BTF_MODEL_ID }}
+      - run: uv run pytest -q -m ml
+        env:
+          UV_NO_SYNC: "1"
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: banthefake:ci
+      - name: Smoke test image
+        shell: bash
+        run: |
+          set -euo pipefail
+          container=$(docker run --detach --publish 8000:8000 banthefake:ci)
+          trap 'docker rm --force "$container" >/dev/null 2>&1 || true' EXIT
+
+          for attempt in {1..60}; do
+            health=$(curl --fail --silent http://127.0.0.1:8000/api/health || true)
+            if jq -e '.ok == true and .model == "loaded"' <<<"$health" >/dev/null 2>&1; then
+              break
+            fi
+            if (( attempt == 60 )); then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 5
+          done
+
+          curl --fail --silent \
+            --form file=@tests/fixtures/ai_dalle_mars.jpg \
+            http://127.0.0.1:8000/api/scan \
+            | jq -e '.verdict == "ai"'
