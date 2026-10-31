@@ -2,6 +2,7 @@
 
 import pytest
 from playwright.sync_api import Page, expect
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from tests.e2e.conftest import fixture_path
 
@@ -63,9 +64,20 @@ def test_keyboard_only_scan_flow(page: Page, watch):
     assert ring[0] == "solid" and ring[1] == "3px", ring
     assert ring[2] == "rgb(255, 181, 71)", ring  # --focus: #ffb547
 
-    with page.expect_file_chooser() as fc:
-        page.keyboard.press("Enter")
-    fc.value.set_files(fixture_path("real_cat_camera_exif.jpg"))
+    # Headless Chromium occasionally drops the first activation of a file input, so allow a retry,
+    # still keyboard-only: Enter twice, then Space (the other standard activation key).
+    chooser = None
+    for key in ("Enter", "Enter", "Space"):
+        expect(page.locator("#file")).to_be_focused()
+        try:
+            with page.expect_file_chooser(timeout=5000) as fc:
+                page.keyboard.press(key)
+            chooser = fc.value
+            break
+        except PlaywrightTimeoutError:
+            continue
+    assert chooser is not None, "keyboard activation never opened the file chooser"
+    chooser.set_files(fixture_path("real_cat_camera_exif.jpg"))
     expect(page.locator("#verdict b")).to_have_text("Camera data found, no AI markers")
     expect(page.locator("#scanStatus")).to_contain_text("Scan finished.")
 

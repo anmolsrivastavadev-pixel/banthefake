@@ -5,3 +5,4 @@ __pycache__/
 data/
 research/
 deploy/hetzner/.env
+.venv-e2e/
