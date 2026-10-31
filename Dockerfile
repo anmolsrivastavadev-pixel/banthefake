@@ -18,14 +18,16 @@ WORKDIR /app
 #    uv.lock pins torch from PyPI, whose Linux wheel pulls ~4 GB of nvidia/cuda/triton packages.
 #    We skip those here and install the matching CPU-only torch build in step 2, so pyproject.toml
 #    and uv.lock stay untouched. torch's pure-Python deps (sympy, networkx, ...) still come from the lock.
+#    Everything else, c2pa-python included (pinned to a release with Linux wheels), installs from the lock.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     set -eu; \
-    skip="--no-install-package torch --no-install-package c2pa-python"; \
+    skip="--no-install-package torch"; \
     for pkg in $(sed -nE 's/^name = "((nvidia-|cuda-)[^"]+|triton)"$/\1/p' uv.lock); do \
         skip="$skip --no-install-package $pkg"; \
     done; \
-    uv sync --frozen --no-dev --extra ml --no-install-project $skip
+    uv sync --frozen --no-dev --extra ml --no-install-project $skip; \
+    /app/.venv/bin/python -c "from c2pa import Context, Reader; print('c2pa ok')"
 
 # 2) CPU-only torch, same version as the lockfile. Its dependencies were installed in step 1.
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -34,18 +36,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /app/.venv/bin/python --no-deps \
         --index-url https://download.pytorch.org/whl/cpu "torch==${torch_version}"; \
     /app/.venv/bin/python -c "import torch; assert not torch.cuda.is_available(); print('torch', torch.__version__)"
-
-# 2b) c2pa-python: the locked 0.38.2 was published with macOS wheels only, so it cannot install on
-#     Linux. Try the locked version first, then fall back to C2PA_FALLBACK (0.38.1 has Linux wheels and
-#     passes the C2PA test suite). Its deps (cryptography, requests, toml) came from the lock in step 1.
-#     Remove this once pyproject/uv.lock pin a version with Linux wheels.
-ARG C2PA_FALLBACK=0.38.1
-RUN --mount=type=cache,target=/root/.cache/uv \
-    set -eu; \
-    c2pa_version=$(sed -n '/^name = "c2pa-python"$/{n;s/^version = "\(.*\)"$/\1/p;}' uv.lock); \
-    uv pip install --python /app/.venv/bin/python --no-deps "c2pa-python==${c2pa_version}" \
-      || uv pip install --python /app/.venv/bin/python --no-deps "c2pa-python==${C2PA_FALLBACK}"; \
-    /app/.venv/bin/python -c "from c2pa import Context, Reader; print('c2pa ok')"
 
 # 3) Bake the detector weights into the image so the container never needs the network.
 ARG BTF_MODEL_ID=buildborderless/CommunityForensics-DeepfakeDet-ViT

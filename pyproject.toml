@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "av>=19.0.2",
-    "c2pa-python>=0.38.2",
+    "c2pa-python==0.38.1",  # 0.38.2 was published with macOS wheels only
     "defusedxml>=0.7.1",
     "fastapi>=0.162.0",
     "numpy>=2.5.4",
