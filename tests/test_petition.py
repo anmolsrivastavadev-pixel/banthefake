@@ -45,7 +45,7 @@ def test_validation_errors(client):
         res = client.post("/api/petition", json=payload)
         assert res.status_code == 422, payload
         assert "error" in res.json()
-    assert client.post("/api/petition", content=b"not json").status_code == 400
+    assert client.post("/api/petition", content=b"not json", headers={"Content-Type": "application/json"}).status_code == 400
     assert client.post("/api/petition", json=["list"]).status_code == 400
     assert count(client) == 0
 

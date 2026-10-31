@@ -12,7 +12,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import scan
 from app.config import Settings
@@ -44,6 +46,46 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "X-Frame-Options": "DENY",
 }
+
+
+MAX_JSON_BODY = 16 * 1024  # petition / erase request bodies
+
+
+class BodyError(Exception):
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+class SecurityHeadersMiddleware:
+    """Pure ASGI middleware adding the security headers to every response.
+
+    It wraps the whole stack, outside Starlette's ServerErrorMiddleware, so even 500 responses produced
+    by the catch-all exception handler carry the headers (an @app.middleware("http") would not see them).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for key, value in SECURITY_HEADERS.items():
+                    headers.setdefault(key, value)
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+class App(FastAPI):
+    def build_middleware_stack(self) -> ASGIApp:
+        return SecurityHeadersMiddleware(super().build_middleware_stack())
 
 
 def error(status: int, message: str, headers: dict[str, str] | None = None) -> JSONResponse:
@@ -95,16 +137,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         scan.warmup()  # start loading the detector model in the background
         yield
 
-    app = FastAPI(title="BanTheFake", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app = App(title="BanTheFake", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.settings = settings
     app.state.store = store
-
-    @app.middleware("http")
-    async def security_headers(request: Request, call_next):
-        response = await call_next(request)
-        for key, value in SECURITY_HEADERS.items():
-            response.headers.setdefault(key, value)
-        return response
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
@@ -113,6 +148,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         return error(422, "Invalid request.")
+
+    @app.exception_handler(Exception)
+    async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+        # Runs inside ServerErrorMiddleware, which logs the traceback; SecurityHeadersMiddleware adds headers.
+        return error(500, "Internal server error.")
 
     def check_admin(request: Request) -> JSONResponse | None:
         if not settings.admin_token:
@@ -126,9 +166,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return None
 
     async def read_json(request: Request) -> object:
+        """Parse a small JSON body. Raises BodyError (415 wrong type, 413 too large); None if not valid JSON.
+
+        Requiring application/json also stops cross-site HTML forms (text/plain, urlencoded) from
+        submitting, since browsers only send that type cross-origin after a CORS preflight.
+        """
+        ctype = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if ctype != "application/json":
+            raise BodyError(415, "Content-Type must be application/json.")
+        declared = request.headers.get("content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) > MAX_JSON_BODY):
+            raise BodyError(413, "Request body is too large.")
+        body = bytearray()
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > MAX_JSON_BODY:
+                raise BodyError(413, "Request body is too large.")
         try:
-            return json.loads(await request.body())
-        except (ValueError, UnicodeDecodeError):
+            return json.loads(body)
+        except (ValueError, UnicodeDecodeError, RecursionError):
             return None
 
     @app.get("/api/health")
@@ -140,7 +196,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def sign(request: Request):
         if not sign_limiter.hit(client_ip(request)):
             return error(429, "Too many attempts. Please try again later.")
-        payload = await read_json(request)
+        try:
+            payload = await read_json(request)
+        except BodyError as exc:
+            return error(exc.status, exc.message)
         if not isinstance(payload, dict):
             return error(400, "Invalid request body.")
         if payload.get("website"):
@@ -175,7 +234,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def erase(request: Request):
         if denied := check_admin(request):
             return denied
-        payload = await read_json(request)
+        try:
+            payload = await read_json(request)
+        except BodyError as exc:
+            return error(exc.status, exc.message)
         email = payload.get("email") if isinstance(payload, dict) else None
         if not isinstance(email, str) or not email.strip():
             return error(422, "email is required.")
