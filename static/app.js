@@ -72,7 +72,7 @@ async function scan(file) {
   detailsEl.replaceChildren();
   elaWrap.style.display = 'none';
 
-  if (isImage) runELA(previewUrl);
+  if (isImage) runELA(previewUrl, seq);
 
   const body = new FormData();
   body.append('file', file);
@@ -230,9 +230,11 @@ function announce(text) {
   setTimeout(() => { scanStatus.textContent = text; }, 50);
 }
 
-function runELA(url) {
+// `seq` is the scan this heatmap belongs to: a newer file chosen while it is being made must not get it.
+function runELA(url, seq) {
   const img = new Image();
   img.onload = () => {
+    if (seq !== scanSeq) return;
     const max = 900, s = Math.min(1, max / Math.max(img.width, img.height));
     const w = Math.round(img.width * s), h = Math.round(img.height * s);
     const a = document.createElement('canvas'); a.width = w; a.height = h;
@@ -240,6 +242,7 @@ function runELA(url) {
     const orig = actx.getImageData(0, 0, w, h);
     const re = new Image();
     re.onload = () => {
+      if (seq !== scanSeq) return;
       const b = document.createElement('canvas'); b.width = w; b.height = h;
       const bctx = b.getContext('2d'); bctx.drawImage(re, 0, 0);
       const comp = bctx.getImageData(0, 0, w, h);

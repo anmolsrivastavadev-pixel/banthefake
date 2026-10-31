@@ -23,6 +23,19 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest -q
 
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.12.5"
+          enable-cache: true
+      - run: uv sync --frozen --group e2e
+      - name: Install Chromium and its system dependencies
+        run: uv run --frozen --group e2e playwright install --with-deps chromium
+      - run: uv run --frozen --group e2e pytest -m e2e
+
   test-ml:
     runs-on: ubuntu-latest
     env:
