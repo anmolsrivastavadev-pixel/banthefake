@@ -1,3 +1,4 @@
+import asyncio
 import hmac
 import json
 import logging
@@ -53,11 +54,41 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+class ScanSlots:
+    """At most `n` scans at a time, process-wide; waiters give up after a timeout.
+
+    The asyncio.Semaphore is created lazily for the running event loop (TestClient may run the app on
+    more than one loop; uvicorn uses one).
+    """
+
+    def __init__(self, n: int) -> None:
+        self.n = n
+        self._sem: asyncio.Semaphore | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _get(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        if self._sem is None or self._loop is not loop:
+            self._sem, self._loop = asyncio.Semaphore(self.n), loop
+        return self._sem
+
+    async def acquire(self, timeout: float) -> bool:
+        try:
+            await asyncio.wait_for(self._get().acquire(), timeout)
+        except TimeoutError:
+            return False
+        return True
+
+    def release(self) -> None:
+        self._get().release()
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     store = PetitionStore(settings.db_path)
     sign_limiter = RateLimiter(settings.sign_rate, 3600)
     scan_limiter = RateLimiter(settings.scan_rate, 60)
+    scan_slots = ScanSlots(settings.scan_concurrency)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -171,7 +202,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if mime in ("image/heic", "image/heif") and not await run_in_threadpool(pillow_can_open, tmp_path):
                 return error(415, "HEIC/HEIF images are not supported on this server.")
             filename = os.path.basename(info.filename.replace("\\", "/"))[:255]
-            report = await run_in_threadpool(scan.scan_file, tmp_path, filename, mime)
+            # Decoding media and running the model is memory hungry: bound how many run at once.
+            if not await scan_slots.acquire(settings.scan_wait_s):
+                return error(503, "busy", {"Retry-After": "30"})
+            try:
+                report = await run_in_threadpool(scan.scan_file, tmp_path, filename, mime)
+            finally:
+                scan_slots.release()
             return report
         except UploadError as exc:
             return error(exc.status, exc.message)
