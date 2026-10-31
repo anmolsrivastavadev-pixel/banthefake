@@ -28,7 +28,8 @@ Plan:
   copied into `tests/fixtures/` with an ATTRIBUTION entry.
 - Wording must say what is and isn't proven.
 
-Status: complete (2026-10-31). The app ships the official C2PA signing and TSA lists issued
+Status: complete (2026-10-31; revised after adversarial review: only the signer list is loaded as trust
+anchors, because c2pa-python pools TSA anchors with signer anchors). The app ships the official C2PA signing and TSA lists issued
 2026-10-23 (next update 2027-01-21), defaults to offline official trust, supports
 `BTF_C2PA_TRUST=off` and the `BTF_C2PA_TRUST_ANCHORS` override, and never enables OCSP or remote
 manifest fetch. `anchors.pem` was excluded because its source and redistribution terms could not be
@@ -117,3 +118,11 @@ YuNet + GenD with identity/source-disjoint train, calibration and locked test gr
 2-vCPU latency/RSS test. Required gates: <=2% real-face FPR with a reported 95% interval, >=80% overall recall,
 >=65% for each manipulation method, image p95 <3 s, eight-frame video p95 <15 s, and added RSS <1.5 GB. If all
 pass, it begins as an opt-in experimental signal that never decides the verdict by itself.
+
+Measured (2026-10-31, `docs/FACESWAP-EVAL.md`): real-face FPR *can* be measured with freely licensed Commons
+portraits, so the benchmark was run with 550 real faces (267 source groups) and 640 swaps between synthetic
+faces made with four classical methods. YuNet + GenD CLIP-L/14 failed the gates: test FPR 1.17% (Wilson 95%
+upper 3.39%; 4.3% on half-size images), overall recall 67.7% (morph 48.8%), 0/8 frames of a real public deepfake
+PSA flagged, added RSS 1.62 GB. Latency passed. **Still do not ship, not even opt-in.** Reopen if the GenD
+authors confirm commercial rights, a larger real-face set (>1000, incl. phone/recompressed) and a licence-clean
+set of modern face swaps become available, or a quantised model clears the RSS gate.
