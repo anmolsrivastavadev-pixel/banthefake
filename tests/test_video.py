@@ -14,7 +14,7 @@ def test_probe_samples_frames(name):
     assert v.timestamps == sorted(v.timestamps) and len(set(v.timestamps)) == len(v.timestamps)
     assert v.timestamps[0] < 1.0 and v.timestamps[-1] > 4.0  # spread over the whole clip
     assert all(f.mode == "RGB" and max(f.size) <= video.MAX_FRAME_SIDE for f in v.frames)
-    assert "Lavf" in " ".join(v.tool_strings())
+    assert any(f == "video tag \u201cencoder\u201d" and "Lavf" in val for f, val in v.tool_fields())
 
 
 def test_probe_without_sampling():
@@ -39,4 +39,4 @@ def test_camera_make_model_from_metadata():
     v = video.VideoInfo(metadata={"com.apple.quicktime.make": "Apple", "com.apple.quicktime.model": "iPhone 15 Pro",
                                   "com.apple.quicktime.software": "17.4"})
     assert (v.make, v.model) == ("Apple", "iPhone 15 Pro")
-    assert "17.4" in v.tool_strings()
+    assert ("video tag \u201ccom.apple.quicktime.software\u201d", "17.4") in v.tool_fields()

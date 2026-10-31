@@ -74,3 +74,62 @@ def huge_png(width: int = 20000, height: int = 20000) -> bytes:
 
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"\0" * 64)) + chunk(b"IEND", b"")
+
+
+def xmp_packet(body: str) -> str:
+    """An XMP packet whose rdf:Description contains `body` (attributes/elements, Adobe namespaces declared)."""
+    return (
+        '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        '<rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/" '
+        'xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" xmlns:stEvt="http://ns.adobe.com/xap/1.0/sType/ResourceEvent#">'
+        f"{body}</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>"
+    )
+
+
+def with_jpeg_segment(data: bytes, marker: int, payload: bytes) -> bytes:
+    """Insert an APPn/COM segment right after the JPEG SOI marker."""
+    assert data[:2] == b"\xff\xd8"
+    return data[:2] + bytes([0xFF, marker]) + struct.pack(">H", len(payload) + 2) + payload + data[2:]
+
+
+def jpeg_iptc_caption(caption: str) -> bytes:
+    """JPEG with an IPTC-IIM caption (record 2, dataset 120) in a Photoshop APP13 segment."""
+    text = caption.encode()
+    iim = b"\x1c\x02\x78" + struct.pack(">H", len(text)) + text
+    if len(iim) % 2:
+        iim += b"\0"
+    irb = b"8BIM" + struct.pack(">H", 0x0404) + b"\0\0" + struct.pack(">I", len(iim)) + iim
+    return with_jpeg_segment(jpeg(), 0xED, b"Photoshop 3.0\0" + irb)
+
+
+def mp4(metadata: dict[str, str] | None = None, stream_metadata: dict[str, str] | None = None,
+        seconds: float = 1.0, fps: int = 10, size: tuple[int, int] = (64, 48), gop: int | None = None) -> bytes:
+    """A small MPEG-4 video built with PyAV (no ffmpeg binary needed)."""
+    import tempfile
+    from pathlib import Path
+
+    import av
+    import numpy as np
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "v.mp4"
+        with av.open(str(path), "w", format="mp4") as out:
+            for k, v in (metadata or {}).items():
+                out.metadata[k] = v
+            st = out.add_stream("mpeg4", rate=fps)
+            st.width, st.height, st.pix_fmt = size[0], size[1], "yuv420p"
+            if gop:
+                st.codec_context.gop_size = gop
+            for k, v in (stream_metadata or {}).items():
+                st.metadata[k] = v
+            w, h = size
+            for i in range(int(seconds * fps)):
+                arr = np.zeros((h, w, 3), np.uint8)
+                arr[..., 0] = (np.arange(w) * 4 + i * 7) % 256
+                arr[..., 1] = (np.arange(h)[:, None] * 5 + i * 3) % 256
+                for packet in st.encode(av.VideoFrame.from_ndarray(arr, format="rgb24")):
+                    out.mux(packet)
+            for packet in st.encode():
+                out.mux(packet)
+        return path.read_bytes()

@@ -23,7 +23,7 @@ def test_camera_exif(tmp_path):
 def test_software_exif(tmp_path):
     meta = exif.extract(write(tmp_path, "p.jpg", media.photoshop_jpeg()))
     assert meta.software.startswith("Adobe Photoshop")
-    assert "Adobe Photoshop 25.0 (Windows)" in meta.tool_strings()
+    assert ("EXIF Software", "Adobe Photoshop 25.0 (Windows)") in meta.tool_fields()
     assert meta.camera == ""
 
 
@@ -37,18 +37,18 @@ def test_xmp_digital_source_type(tmp_path):
 def test_png_text_chunks(tmp_path, compressed):
     meta = exif.extract(write(tmp_path, "sd.png", media.png({"parameters": media.SD_PARAMETERS}, compressed)))
     assert meta.text_chunks["parameters"].startswith("a cat astronaut")
-    assert any("Steps: 30" in s for s in meta.tool_strings())
+    assert any(f == "PNG text \u201cparameters\u201d" and "Steps: 30" in v for f, v in meta.tool_fields())
 
 
 def test_real_photoshop_fixture_xmp_tools():
     meta = exif.extract(FIXTURES / "real_cat_original_exif.jpg")
     assert "Photoshop" in meta.software
-    assert any("Photoshop" in t for t in meta.xmp_tools)
+    assert any(f.startswith("XMP") and "Photoshop" in v for f, v in meta.xmp_tools)
 
 
 def test_no_metadata(tmp_path):
     meta = exif.extract(write(tmp_path, "plain.png", media.png()))
-    assert not meta.has_exif and not meta.xmp and meta.tool_strings() == []
+    assert not meta.has_exif and not meta.xmp and meta.tool_fields() == []
 
 
 def test_decompression_bomb_rejected(tmp_path):

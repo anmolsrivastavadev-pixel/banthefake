@@ -28,6 +28,8 @@ class Signal(TypedDict):
     kind: SignalKind
     text: str
     weight: float
+    field: NotRequired[str]  # marker signals: the metadata field the marker was found in
+    snippet: NotRequired[str]  # marker signals: the matched text (at most 80 characters)
 
 
 class C2PAInfo(TypedDict):
@@ -92,7 +94,11 @@ class _Collector:
         for h in hits:
             if h.key not in self._keys:
                 self._keys.add(h.key)
-                self.signals.append(_sig(h.kind, h.text, h.weight))
+                sig = _sig(h.kind, h.text, h.weight)
+                if h.field:
+                    sig["field"] = h.field
+                    sig["snippet"] = h.snippet
+                self.signals.append(sig)
 
     def add(self, kind: SignalKind, text: str, weight: float) -> None:
         self.signals.append(_sig(kind, text, weight))
@@ -114,10 +120,12 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
     cred = c2pa_check.read(path, content_type)
     if cred is not None and not cred.readable:
         cred = c2pa_check.C2PAResult(present=True, readable=False) if markers.has_c2pa_hint(raw) else None
-    tool_strings: list[str] = []
+    tool_fields: list[tuple[str, str]] = []
     if cred is not None and cred.readable and not cred.ai_generated:
         # an AI declaration is reported once, by the C2PA signal; otherwise check the named tools
-        tool_strings += [cred.generator, *cred.software_agents]
+        tool_fields.append(("C2PA claim generator", cred.generator))
+        tool_fields += [("C2PA softwareAgent", a) for a in cred.software_agents]
+    chunk_hits: list[Hit] = []
 
     # --- format-specific metadata + pixels for the model ---------------------------------------
     frames = []
@@ -132,9 +140,10 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
             out.add("info", "The image could not be decoded; only its raw bytes were checked.", 0.1)
         else:
             file_info["width"], file_info["height"] = meta.width, meta.height
-        tool_strings += meta.tool_strings()
+        tool_fields += meta.tool_fields()
         # generator settings stored in (possibly compressed) text chunks
-        raw_hits += markers.scan_bytes("\n".join(meta.text_chunks.values()).encode("utf-8", "replace"))
+        for key, value in meta.text_chunks.items():
+            chunk_hits += markers.scan_bytes(value.encode("utf-8", "replace"), meta.text_field(key))
         camera = meta.camera if (meta.make or meta.model) else ""
         camera_details = meta.camera_details
         has_metadata = meta.has_exif or bool(meta.xmp) or bool(meta.text_chunks)
@@ -155,17 +164,18 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
             file_info["duration_s"] = round(vid.duration_s, 2)
         if vid.error:
             out.add("info", f"Video check limited: {vid.error}.", 0.1)
-        tool_strings += vid.tool_strings()
+        tool_fields += vid.tool_fields()
         camera = " ".join(x for x in (vid.make, vid.model) if x)
         frames = vid.frames
         has_metadata = bool(camera) or any(k.startswith("com.apple") for k in vid.metadata)
 
-    text_hits = markers.scan_text([s for s in tool_strings if s])
+    text_hits = markers.scan_text(tool_fields)
 
     # --- assemble signals in priority order ----------------------------------------------------
     if cred is not None:
         _c2pa_signals(out, cred)
-    out.hits([h for h in raw_hits + text_hits if h.kind == "ai"])
+    # most specific source first: a named metadata field beats a match somewhere in the raw bytes
+    out.hits([h for h in text_hits + chunk_hits + raw_hits if h.kind == "ai"])
     out.hits([h for h in text_hits if h.kind == "edit"])
     if cred is not None and cred.readable and cred.edit_actions:
         names = ", ".join(_action_name(a) for a in cred.edit_actions[:6])
@@ -215,7 +225,11 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
     if cred.ai_generated:
         trained = any(t.rsplit("/", 1)[-1] == "trainedAlgorithmicMedia" for t in cred.source_types)
         key = "iptc_trained" if trained else "iptc_composite"
-        out.hits([Hit("ai", key, "Content credentials declare this was made or changed with generative AI.", 1.0)])
+        source = next(t for t in cred.source_types if t.rsplit("/", 1)[-1] in c2pa_check.AI_SOURCE_TYPES)
+        snippet = source.rsplit("/", 1)[-1][: markers.SNIPPET_MAX]
+        out.hits([Hit("ai", key, "Content credentials declare this was made or changed with generative AI. "
+                      f"Found in C2PA actions digitalSourceType: \u201c{snippet}\u201d", 1.0,
+                      "C2PA actions digitalSourceType", snippet)])
     elif cred.source_types:
         kinds = ", ".join(dict.fromkeys(t.rsplit("/", 1)[-1] for t in cred.source_types))
         out.add("c2pa", f"Content credentials list the source type as: {kinds} (not generative AI).", 0.3)

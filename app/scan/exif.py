@@ -16,10 +16,23 @@ MAX_TEXT = 64 * 1024  # cap per metadata text value
 
 T = ExifTags.Base
 CAMERA_DETAIL_TAGS = (T.ExposureTime, T.FNumber, T.ISOSpeedRatings, T.FocalLength, T.LensModel)
+# XMP properties that name the creating software. Free-text properties (dc:description, dc:title,
+# photoshop:Headline, dc:rights...) are deliberately not read: a caption mentioning "Midjourney" says
+# nothing about how the file was made.
 XMP_TOOL_RE = re.compile(
-    r"(?:xmp:CreatorTool|stEvt:softwareAgent|tiff:Software|exif:Software|"
-    r"tiff:Make|tiff:Model|pdf:Producer)\s*(?:=\s*\"([^\"]*)\"|>([^<]*)<)",
+    r"(xmp:CreatorTool|stEvt:softwareAgent|tiff:Software|exif:Software|pdf:Producer)"
+    r"\s*(?:=\s*\"([^\"]*)\"|>([^<]*)<)",
 )
+XMP_FIELDS = {
+    "xmp:CreatorTool": "XMP CreatorTool",
+    "stEvt:softwareAgent": "XMP History softwareAgent",
+    "tiff:Software": "XMP tiff:Software",
+    "exif:Software": "XMP exif:Software",
+    "pdf:Producer": "XMP pdf:Producer",
+}
+# PNG text keys written by AI generators (A1111/Forge "parameters", ComfyUI "prompt"/"workflow",
+# NovelAI and others "Software"). Other keys (Title, Description, Comment, Author...) are free text.
+PNG_TOOL_KEYS = {"parameters", "prompt", "workflow", "software"}
 XMP_DST_RE = re.compile(r"DigitalSourceType\s*(?:=\s*\"([^\"]*)\"|>([^<]*)<|[^>]*rdf:resource=\"([^\"]*)\")")
 SKIP_INFO_KEYS = {"exif", "icc_profile", "xmp", "XML:com.adobe.xmp", "photoshop", "adobe", "jfif_unit"}
 
@@ -37,10 +50,11 @@ class ImageMeta:
     make: str = ""
     model: str = ""
     software: str = ""
+    processing_software: str = ""
     datetime_original: str = ""
     camera_details: bool = False
     xmp: str = ""
-    xmp_tools: list[str] = field(default_factory=list)
+    xmp_tools: list[tuple[str, str]] = field(default_factory=list)  # (field label, value)
     digital_source_types: list[str] = field(default_factory=list)
     text_chunks: dict[str, str] = field(default_factory=dict)
     error: str | None = None
@@ -52,11 +66,20 @@ class ImageMeta:
             return model
         return f"{make} {model}".strip()
 
-    def tool_strings(self) -> list[str]:
-        """Metadata values that name the software or device that produced the file."""
-        values = [self.software, self.make, self.model, *self.xmp_tools, *self.digital_source_types]
-        values += [f"{k}: {v}" for k, v in self.text_chunks.items()]
-        return [v for v in values if v]
+    def tool_fields(self) -> list[tuple[str, str]]:
+        """`(field, value)` pairs for metadata fields that name the software that produced the file."""
+        values = [("EXIF Software", self.software), ("EXIF ProcessingSoftware", self.processing_software)]
+        values += self.xmp_tools
+        values += [("XMP DigitalSourceType", v) for v in self.digital_source_types]
+        values += [(self.text_field(k), v) for k, v in self.text_chunks.items() if k.lower() in PNG_TOOL_KEYS]
+        return [(f, v) for f, v in values if v]
+
+    def text_field(self, key: str) -> str:
+        if self.format == "PNG":
+            return f"PNG text \u201c{key}\u201d"
+        if key.lower() == "comment":
+            return f"{self.format or 'image'} comment"
+        return f"{self.format or 'image'} text \u201c{key}\u201d"
 
 
 def _clean(value: object) -> str:
@@ -98,7 +121,9 @@ def extract(path: str | Path) -> ImageMeta:
             pass
         meta.xmp = _xmp_text(im)
         if meta.xmp:
-            meta.xmp_tools = [_clean(a or b) for a, b in XMP_TOOL_RE.findall(meta.xmp) if (a or b).strip()][:20]
+            meta.xmp_tools = [
+                (XMP_FIELDS[tag], _clean(a or b)) for tag, a, b in XMP_TOOL_RE.findall(meta.xmp) if (a or b).strip()
+            ][:20]
             meta.digital_source_types = [
                 _clean(next(g for g in groups if g)) for groups in XMP_DST_RE.findall(meta.xmp) if any(groups)
             ][:10]
@@ -119,7 +144,8 @@ def _read_exif(im: Image.Image, meta: ImageMeta) -> None:
     meta.has_exif = True
     meta.make = _clean(exif.get(T.Make))
     meta.model = _clean(exif.get(T.Model))
-    meta.software = _clean(exif.get(T.Software)) or _clean(exif.get(T.ProcessingSoftware))
+    meta.software = _clean(exif.get(T.Software))
+    meta.processing_software = _clean(exif.get(T.ProcessingSoftware))
     sub = exif.get_ifd(ExifTags.IFD.Exif)
     meta.datetime_original = _clean(sub.get(T.DateTimeOriginal))
     meta.camera_details = any(tag in sub for tag in CAMERA_DETAIL_TAGS)

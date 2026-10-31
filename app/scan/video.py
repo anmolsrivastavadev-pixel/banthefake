@@ -14,7 +14,9 @@ MAX_PIXELS = 8192 * 4320  # refuse to decode frames larger than 8K
 MAX_FRAME_SIDE = 1024  # sampled frames are downscaled to this long side
 MAX_DECODE_PER_SEEK = 240  # frames decoded after a seek before settling for the last one
 TIME_BUDGET_S = 20.0
-META_KEYS_TOOL = ("encoder", "software", "comment", "description", "title", "artist", "copyright", "make", "model")
+# Tags that name the encoding/creating software. Free-text tags (title, artist, comment, description,
+# copyright...) are not used: "Runway highlights" in a title says nothing about how the file was made.
+META_KEYS_TOOL = ("encoder", "software", "handler")
 
 
 @dataclass
@@ -37,12 +39,10 @@ class VideoInfo:
     def model(self) -> str:
         return _first(self.metadata, ("com.apple.quicktime.model", "model"))
 
-    def tool_strings(self) -> list[str]:
-        out = []
-        for k, v in self.metadata.items():
-            if any(t in k.lower() for t in META_KEYS_TOOL):
-                out.append(v)
-        return out
+    def tool_fields(self) -> list[tuple[str, str]]:
+        """`(field, value)` pairs for container/stream tags that name the creating software."""
+        return [(f"video tag \u201c{k}\u201d", v) for k, v in self.metadata.items()
+                if v and any(t in k.lower() for t in META_KEYS_TOOL)]
 
 
 def _first(meta: dict[str, str], keys: tuple[str, ...]) -> str:
