@@ -152,6 +152,44 @@ def test_new_upload_replaces_previous_result(page: Page, watch):
     expect(page.locator("#dropInner img")).to_have_count(0)
 
 
+# Simulates the user picking `second` at the moment the first image's heatmap is half-made (re-encoded, not
+# yet decoded): the first heatmap must not appear under the second file's result.
+SWAP_FILE_MID_ELA = """([bytes, name, type]) => {
+  const orig = HTMLCanvasElement.prototype.toDataURL;
+  HTMLCanvasElement.prototype.toDataURL = function (...args) {
+    const out = orig.apply(this, args);
+    HTMLCanvasElement.prototype.toDataURL = orig;
+    const dt = new DataTransfer();
+    dt.items.add(new File([new Uint8Array(bytes)], name, { type }));
+    const input = document.getElementById('file');
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change'));
+    return out;
+  };
+}"""
+
+
+@pytest.mark.parametrize(("second", "mime"), [("test_clip.mp4", "video/mp4"), ("real_bridge.jpg", "image/jpeg")])
+def test_stale_heatmap_is_not_shown_for_a_newer_file(page: Page, watch, second, mime):
+    page.goto("/")
+    page.evaluate(SWAP_FILE_MID_ELA, [list(fixture_path(second).read_bytes()), second, mime])
+    page.set_input_files("#file", fixture_path("pixel10_verified.jpg"))  # 4080 × 3072: heatmap is 900 wide
+    wait_for_result(page)
+    expect(page.locator("#verdict b")).not_to_have_text("Verified camera capture")
+    if mime.startswith("video/"):
+        expect(page.locator("#dropInner video")).to_have_count(1)
+        page.wait_for_timeout(500)
+        expect(page.locator("#elaWrap")).to_be_hidden()
+    else:
+        expect(page.locator("#dropInner img")).to_have_attribute("alt", f"Preview of {second}")
+        assert_ela_rendered(page)
+        page.wait_for_timeout(500)
+        size = page.eval_on_selector("#ela", "c => [c.width, c.height]")
+        natural = page.eval_on_selector("#dropInner img", "i => [i.naturalWidth, i.naturalHeight]")
+        scale = min(1, 900 / max(natural))
+        assert size == [round(natural[0] * scale), round(natural[1] * scale)], (size, natural)
+
+
 @pytest.mark.skipif(not hf_cache_has_pinned_models(),
                     reason="needs the ml extra and both pinned detectors in the local HF cache "
                            "(research/detect/hf_cache or BTF_E2E_HF_HOME)")
