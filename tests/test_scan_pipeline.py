@@ -84,9 +84,9 @@ def test_edited_photoshop_software(client):
 
 
 def test_edited_real_fixture_with_photoshop_xmp(client):
-    body = post(client, "cat.jpg", (FIXTURES / "real_cat_original_exif.jpg").read_bytes())
+    body = post(client, "truman.jpg", (FIXTURES / "real_face_truman.jpg").read_bytes())
     assert body["verdict"] == "edited"
-    assert body["file"]["width"] == 1600
+    assert body["file"]["width"] == 350
 
 
 def test_edited_c2pa_color_adjustments(client):
@@ -128,7 +128,7 @@ def test_unknown_plain_png_no_metadata(client):
     assert kinds(body) == ["info"]  # "no metadata at all"
 
 
-@pytest.mark.parametrize("name", ["real_bridge.jpg", "ai_midjourney_city.jpg", "real_face_obama.jpg"])
+@pytest.mark.parametrize("name", ["real_bridge.jpg", "ai_midjourney_city.jpg", "real_cat_q70_640.jpg"])
 def test_fixtures_without_markers_are_unknown(client, name):
     body = post(client, name, (FIXTURES / name).read_bytes())
     assert body["verdict"] == "unknown" and body["c2pa"] is None

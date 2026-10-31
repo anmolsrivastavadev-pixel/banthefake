@@ -244,8 +244,6 @@ uv run pytest -q -m "not ml"
 
 ### Test fixture licences
 
-Before you publish this repository or the image, **verify the licence of every file in `tests/fixtures/`.**
-`C.jpg` and `CA.jpg` come from [c2pa-rs](https://github.com/contentauth/c2pa-rs) (MIT/Apache-2.0). The
-provenance of the other images and clips (`ai_*`, `real_*`, `test_clip.*`) has not been documented here.
-Confirm it, or replace them with files you have rights to. `real_face_obama.jpg` shows a real person, so check
-its licence and consider replacing it. `.dockerignore` keeps `tests/` out of the Docker image.
+Sources, authors, licences, modifications, and derived-file details are recorded in
+[`tests/fixtures/ATTRIBUTION.md`](tests/fixtures/ATTRIBUTION.md). `.dockerignore` keeps `tests/` out of the
+Docker image.

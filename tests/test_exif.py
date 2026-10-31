@@ -42,9 +42,16 @@ def test_png_text_chunks(tmp_path, compressed):
 
 
 def test_real_photoshop_fixture_xmp_tools():
-    meta = exif.extract(FIXTURES / "real_cat_original_exif.jpg")
+    meta = exif.extract(FIXTURES / "real_face_truman.jpg")
     assert "Photoshop" in meta.software
     assert any(f.startswith("XMP") and "Photoshop" in v for f, v in meta.xmp_tools)
+
+
+def test_real_camera_fixture_exif():
+    meta = exif.extract(FIXTURES / "real_cat_camera_exif.jpg")
+    assert meta.camera == "Panasonic DC-FZ82"
+    assert meta.software == "Ver.1.1"
+    assert meta.camera_details
 
 
 def test_no_metadata(tmp_path):

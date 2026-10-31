@@ -9,7 +9,7 @@ from tests.conftest import FIXTURES
 pytestmark = pytest.mark.ml
 
 AI = ["ai_dalle_mars.jpg", "ai_dalle_cat_q70_640.jpg", "ai_face_stylegan.jpg"]
-REAL = ["real_bridge.jpg", "real_cat_q70_640.jpg", "real_face_obama.jpg", "real_cat_original_exif.jpg"]
+REAL = ["real_bridge.jpg", "real_cat_q70_640.jpg", "real_face_truman.jpg", "real_cat_camera_exif.jpg"]
 
 
 def score(name):
