@@ -8,6 +8,9 @@ services:
     build:
       context: ../..
     image: banthefake:local
+    labels:
+      org.banthefake.git-commit: ${BTF_DEPLOY_COMMIT:-unknown}
+      org.banthefake.compose-hash: ${BTF_COMPOSE_HASH:-unknown}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -51,7 +54,11 @@ services:
         max-file: "3"
 
   caddy:
+    # TODO: replace caddy:2 with an upstream-verified digest (none is recorded in this repository yet).
     image: caddy:2
+    labels:
+      org.banthefake.git-commit: ${BTF_DEPLOY_COMMIT:-unknown}
+      org.banthefake.compose-hash: ${BTF_COMPOSE_HASH:-unknown}
     restart: unless-stopped
     # Host networking so Caddy sees real client addresses for IPv4 and IPv6 alike (a published port
     # would hide IPv6 visitors behind Docker's proxy and put them all in one rate-limit bucket).

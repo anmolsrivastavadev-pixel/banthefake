@@ -134,14 +134,19 @@ This is Option A with the host preparation automated. Read Option A once for how
    as in [A1](#a1-create-the-server) (CPX22, Ubuntu 24.04, IPv4 + IPv6, backups on, the Cloud Firewall) and
    paste the file into **Cloud config**. Point DNS at it ([A2](#a2-dns)).
 
-   On first boot it creates the `deploy` user (key-only, passwordless sudo, in the `docker` group), disables
-   root and password SSH logins, enables unattended security upgrades, adds 2 GB of swap, installs Docker
+   On first boot it creates the `deploy` user (key-only, passwordless sudo, in the `docker` group), enables
+   unattended security upgrades, adds 2 GB of swap, installs Docker
    Engine and the compose plugin from Docker's official apt repository (per
    <https://docs.docker.com/engine/install/ubuntu/>), enables `ufw` with only 22/tcp, 80/tcp, 443/tcp and
    443/udp open, clones the repository to `/opt/banthefake` at `BTF_REF`, creates `deploy/hetzner/.env` from
    `.env.example` (mode 600), and installs the `btf-backup.timer` systemd timer (daily backup with
    `backup-db.sh` into `/var/backups/banthefake`). This takes a few minutes; progress is in
-   `/var/log/cloud-init-output.log` and `/var/log/btf-provision.log`.
+   `/var/log/cloud-init-output.log` and `/var/log/btf-provision.log`. After `ufw` has allowed port 22, the
+   provisioner validates `/home/deploy/.ssh/authorized_keys` with `ssh-keygen -l -f`. Only a successful check
+   makes it disable root and password SSH login and restart sshd. If the placeholder was not replaced or the
+   key is invalid, hardening is skipped, provider-injected root access remains available, and a prominent
+   explanation is written to `/etc/motd` and both provisioning logs. Install a valid deploy key and re-run
+   `/usr/local/sbin/btf-provision.sh` before relying on the `deploy` login.
 
 2. **SSH in:** `ssh deploy@SERVER_IP`. (`cloud-init status --wait` blocks until provisioning has finished.)
 
@@ -163,12 +168,23 @@ This is Option A with the host preparation automated. Read Option A once for how
 - refuses to run unless `.env` has `BTF_DOMAIN`, `ACME_EMAIL` (no `example.*` placeholders),
   `BTF_ADMIN_TOKEN` (at least 24 characters) and a non-placeholder `BTF_PRIVACY_CONTACT`, and refuses if
   tracked files in the checkout were edited;
-- fetches, checks out the ref detached (a branch name means the latest fetched commit of that branch), tags
-  the running image `banthefake:rollback`, builds the app image, pulls Caddy and runs `docker compose up -d`;
-- waits up to `HEALTH_TIMEOUT` seconds (default 600) for `http://127.0.0.1:8000/api/health` to report
-  `"model":"loaded"` (or `"off"` if `.env` sets `BTF_MODEL=off`), then prints the public URL;
-- if the build, start or health check fails, checks out the previous commit, restores the previous image,
-  restarts it, waits for health again and exits non-zero.
+- fetches and resolves the ref (a branch name means the latest fetched commit of that branch), then compares
+  the target commit and expanded Compose configuration hash with labels on both running containers. If those
+  match and the complete health check passes, it skips build, pull and `up`;
+- records the running app and Caddy container IDs, reads their immutable image IDs, and gives each a unique
+  per-run rollback tag before checking out the target. A normal update builds the app image, pulls Caddy and
+  runs `docker compose up -d`;
+- waits up to `HEALTH_TIMEOUT` seconds (default 600) for both Compose services to be running, for the direct
+  app endpoint at `http://127.0.0.1:8000/api/health` to report `"model":"loaded"` (or `"off"` if `.env` sets
+  `BTF_MODEL=off`), and for the same endpoint through Caddy and local TLS resolution to succeed. It retries
+  HTTPS for `CERT_TIMEOUT` seconds (default 60) while Caddy obtains its first certificate. If HTTPS is not
+  ready but port 80 returns an HTTP-to-HTTPS redirect to the configured domain, that redirect is accepted as
+  proof that Caddy is serving; certificate completion must then be checked after DNS reaches the server;
+- if build, start, or any health condition fails, stops the attempted stack, checks out the previous commit,
+  and starts only the service images captured at invocation start through a temporary Compose override. It
+  prints the final state even when a rollback step fails. On a first deploy, where nothing was running, it
+  stops the attempted stack and never starts an unrelated stale image. Successful deploys remove the per-run
+  rollback tags.
 
 The first build takes roughly 10 to 20 minutes. Afterwards, do [A6](#a6-verify-client-ip-handling) and the
 [pre-launch checklist](#pre-launch-checklist). Prefer deploying tags or commits that passed CI over `main`.
@@ -369,13 +385,14 @@ docker image prune -f
 - **Every restart resets the in-memory rate limiter.** Counters start from zero, so a restart briefly gives
   everyone a fresh quota. This is acceptable for deploys, but do not restart in a loop to clear a block, and
   do not run a second app container "for zero downtime": it would double every limit.
-- **Rollback:** check out the previous commit and repeat `build` + `up -d`. To roll back without
-  rebuilding, tag images before updating, for example
-  `docker tag banthefake:local banthefake:prev`.
+- **Rollback:** `deploy.sh` captures the immutable image IDs used by both running containers before an update
+  and restores those exact app and Caddy images if the update fails. For a manual rollback, deploy the prior
+  release tag with `./deploy.sh <previous-tag>`.
 - **Caddy:** `docker compose pull caddy && docker compose up -d caddy`.
 - **TODO (requires upstream verification):** pin `caddy:2` to a verified image digest in the Compose file.
   This checkout was repaired offline, so no digest is guessed here. Verify the digest against Caddy's
-  official image publication before pinning it.
+  official image publication before pinning it. Until then, `deploy.sh` preserves the running Caddy image ID
+  alongside the app image so rollback cannot select a different image behind the mutable tag.
 
 ---
 

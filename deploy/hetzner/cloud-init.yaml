@@ -11,7 +11,7 @@
 #
 # What it does:
 #   - user `deploy` (SSH key only, passwordless sudo, member of `docker`); root login and password
-#     login over SSH are disabled
+#     login over SSH are disabled only after the deploy key passes ssh-keygen validation
 #   - unattended security upgrades, 2 GB swap
 #   - Docker Engine + compose plugin from Docker's official apt repository, following
 #     https://docs.docker.com/engine/install/ubuntu/ ("Install using the apt repository", read 2026-10-31)
@@ -34,8 +34,9 @@ users:
       # REPLACE-ME: your public key, e.g. the contents of ~/.ssh/id_ed25519.pub
       - ssh-ed25519 AAAAREPLACE-WITH-YOUR-PUBLIC-KEY you@example.org
 
-disable_root: true
-ssh_pwauth: false
+# Keep provider-injected root access until the deploy user's key has been verified by the provisioning script.
+disable_root: false
+ssh_pwauth: true
 
 package_update: true
 package_upgrade: true
@@ -62,15 +63,6 @@ write_files:
     content: |
       # AGE_RECIPIENT=age1...
       # KEEP=14
-
-  # sshd uses the first value it reads; this file sorts before cloud-init's 50-cloud-init.conf.
-  - path: /etc/ssh/sshd_config.d/10-banthefake.conf
-    permissions: "0644"
-    content: |
-      PermitRootLogin no
-      PasswordAuthentication no
-      KbdInteractiveAuthentication no
-      PubkeyAuthentication yes
 
   - path: /etc/apt/apt.conf.d/20auto-upgrades
     permissions: "0644"
@@ -149,6 +141,42 @@ write_files:
       ufw allow 443/udp
       ufw --force enable
 
+      # Do not remove provider root access until the replacement login path is proven usable. The shipped
+      # placeholder is intentionally invalid, so forgetting to replace it leaves a loud warning instead of
+      # locking the operator out. Port 22 is already allowed above before either path continues.
+      auth_keys=/home/deploy/.ssh/authorized_keys
+      motd_begin='=== BANTHEFAKE SSH HARDENING WARNING ==='
+      motd_end='=== END BANTHEFAKE SSH HARDENING WARNING ==='
+      warn_ssh_not_hardened() {
+          rm -f /etc/ssh/sshd_config.d/10-banthefake.conf
+          warning='BANTHEFAKE SSH HARDENING WAS SKIPPED: /home/deploy/.ssh/authorized_keys has no valid key, or the hardened sshd configuration did not validate. Replace the REPLACE-ME ssh_authorized_keys value in cloud-init (or install a valid deploy key), verify it with ssh-keygen -l -f /home/deploy/.ssh/authorized_keys, then re-run /usr/local/sbin/btf-provision.sh. Provider-injected root access and password-auth policy were left unchanged to prevent lockout.'
+          touch /etc/motd
+          if ! grep -Fqx "$motd_begin" /etc/motd; then
+              printf '\n%s\n%s\n%s\n' "$motd_begin" "$warning" "$motd_end" >> /etc/motd
+          fi
+          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+          echo "$warning"
+          echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+      }
+      if [ -s "$auth_keys" ] && ssh-keygen -l -f "$auth_keys" >/dev/null 2>&1; then
+          touch /etc/motd
+          sed -i "/^${motd_begin}$/,/^${motd_end}$/d" /etc/motd
+          cat > /etc/ssh/sshd_config.d/10-banthefake.conf <<'EOF'
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+      EOF
+          if /usr/sbin/sshd -t; then
+              systemctl restart ssh
+              echo "SSH HARDENING ENABLED: deploy authorized_keys passed ssh-keygen validation; root/password login disabled."
+          else
+              warn_ssh_not_hardened
+          fi
+      else
+          warn_ssh_not_hardened
+      fi
+
       # 2 GB swap as a safety net for memory peaks.
       if [ ! -f /swapfile ]; then
           fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
@@ -176,7 +204,6 @@ write_files:
       systemctl daemon-reload
       systemctl enable btf-backup.timer
       systemctl start btf-backup.timer
-      systemctl restart ssh
       echo "BanTheFake provisioning finished. Next: ssh deploy@<this server>, edit $envfile, run ./deploy.sh <ref>."
 
 runcmd:

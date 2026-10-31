@@ -3,6 +3,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 log = logging.getLogger("banthefake")
 
@@ -10,14 +11,9 @@ MIN_ADMIN_TOKEN_LEN = 24
 
 ENVIRONMENTS = ("development", "production")
 PRIVACY_CONTACT_PLACEHOLDER = "privacy@YOUR-DOMAIN.example"
-# Deliberately conservative: no quotes, angle brackets, spaces or control characters can get through, so the
-# value is safe in an href even before it is HTML-escaped (which it is anyway).
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})+")
-_URL_CHARS = r"[A-Za-z0-9._~!$&'()*+,;=:@%/?-]"
-_HTTPS_URL_RE = re.compile(
-    r"https://[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})+(?::[0-9]{1,5})?"
-    rf"(?:/{_URL_CHARS}*)?(?:\?{_URL_CHARS}*)?(?:#{_URL_CHARS}*)?"
-)
+_EMAIL_LOCAL_RE = re.compile(r"[A-Za-z0-9._%+-]{1,64}")
+_HOST_LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+_TLD_RE = re.compile(r"[A-Za-z]{2,63}")
 # RFC 2606 / RFC 6761 names that can never be a real, monitored contact.
 _RESERVED_DOMAIN_RE = re.compile(r"(?:^|\.)(?:example(?:\.(?:com|org|net))?|invalid|test|localhost)$", re.I)
 
@@ -26,10 +22,57 @@ class ConfigError(Exception):
     """A setting is invalid: the app must not start."""
 
 
+def _valid_hostname(hostname: str) -> bool:
+    if len(hostname) > 253 or hostname.endswith("."):
+        return False
+    labels = hostname.split(".")
+    return (
+        len(labels) >= 2
+        and all(_HOST_LABEL_RE.fullmatch(label) for label in labels)
+        and bool(_TLD_RE.fullmatch(labels[-1]))
+    )
+
+
+def _valid_email(value: str) -> bool:
+    local, separator, domain = value.rpartition("@")
+    return bool(
+        separator
+        and _EMAIL_LOCAL_RE.fullmatch(local)
+        and not local.startswith(".")
+        and not local.endswith(".")
+        and ".." not in local
+        and _valid_hostname(domain)
+    )
+
+
+def _valid_https_url(value: str) -> bool:
+    # urlsplit validates IPv6 bracket syntax and exposes malformed/out-of-range ports via ValueError.
+    if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value):
+        return False
+    if any(char in value for char in "\"'<>\\"):
+        return False
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return bool(
+        value.startswith("https://")
+        and parsed.scheme == "https"
+        and parsed.netloc
+        and not parsed.netloc.endswith(":")
+        and parsed.hostname
+        and parsed.username is None
+        and parsed.password is None
+        and (port is None or 1 <= port <= 65535)
+        and _valid_hostname(parsed.hostname)
+    )
+
+
 def validate_privacy_contact(raw: str) -> str:
     """Return the trimmed contact (an email address or an https:// URL), or raise ConfigError."""
     value = raw.strip()
-    if len(value) > 254 or not (_EMAIL_RE.fullmatch(value) or _HTTPS_URL_RE.fullmatch(value)):
+    if len(value) > 254 or not (_valid_email(value) or _valid_https_url(value)):
         raise ConfigError(
             "BTF_PRIVACY_CONTACT must be an email address (privacy@your-domain.org) or an https:// URL, "
             "without spaces, quotes or angle brackets."
@@ -43,10 +86,7 @@ def is_url_contact(contact: str) -> bool:
 
 def _contact_domain(contact: str) -> str:
     if is_url_contact(contact):
-        host = contact[len("https://"):]
-        for sep in "/?#":
-            host = host.split(sep, 1)[0]
-        return host.rsplit(":", 1)[0]
+        return urlsplit(contact).hostname or ""
     return contact.rsplit("@", 1)[1]
 
 
