@@ -257,6 +257,9 @@ numbers that only matters for black-and-white images, and there it can only lowe
   Commons AI images may be in its training set, which would inflate its recall here.
 - **No adversarial tests.** Nobody tried to evade the detectors with added noise, re-photographing, upscalers,
   or images built to fool them. A motivated adversary can probably push either model below its threshold.
+- **Partial desaturation.** In a reviewer probe, partially desaturating an AI image (for example keeping 15% of
+  its colour, which is not caught by the low-colour guard) can drop the secondary model's score, which can lower a "likely"
+  result to "possible" or "none". Fully greyscale and low-colour images are excluded from AI verdicts.
 - **Whole-image classifiers.** These models do not detect face swaps, inpainting of a small region, or lip-sync
   in video.
 - **Labels can still be wrong.** The AI labels rest on Commons categories plus an agent-assisted visual and

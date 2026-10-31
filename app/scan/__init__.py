@@ -5,6 +5,7 @@ C2PA content credentials -> optional ML detector -> verdict.
 """
 
 import logging
+import math
 import os
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
@@ -40,8 +41,10 @@ class C2PAInfo(TypedDict):
     issuer: str
     signer: str
     signed_at: str
-    capture: bool
-    ai_generated: bool
+    capture: bool  # declared camera capture from a valid, trusted manifest only
+    claimed_capture: bool  # declared camera capture, verified or not
+    ai_generated: bool  # the manifest or one of its ingredients' manifests declares generative AI
+    ingredient_ai: bool  # an ingredient's own manifest declares generative AI
     actions: list[str]
     edits: list[str]
     ingredients: list[dict[str, str]]
@@ -68,6 +71,9 @@ class ModelInfo(TypedDict):
     decision: model.Tier  # combined decision: "likely" | "possible" | "none"
     models: list[ModelScore]  # every model that ran, primary first
     frames_checked: int
+    low_colour: NotRequired[bool]  # set (True) when the scores are outside the detector's reliable range
+    frames_likely: NotRequired[int]  # videos: sampled frames individually rated "likely"
+    frames_possible: NotRequired[int]  # videos: sampled frames individually rated "possible"
     frame_probabilities: NotRequired[list[float]]
     frame_timestamps: NotRequired[list[float]]
     coverage: NotRequired[Coverage]
@@ -93,7 +99,7 @@ class ScanReport(TypedDict):
 
 
 class Capabilities(TypedDict):
-    model: Literal["loaded", "loading", "off", "unavailable"]
+    model: Literal["loaded", "degraded", "loading", "off", "unavailable"]
     c2pa: bool
 
 
@@ -284,8 +290,16 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
             f"signature is intact, but the signer ({cred.issuer or 'unknown'}) is not on our trust list, "
             "so who made it cannot be confirmed"
         )
-    out.add("c2pa", f"Content credentials (C2PA) found, made{by}; {sig}.", 0.7)
-    if cred.ai_generated and cred.trusted:
+    parts = f" The credentials include {_ingredients_text(cred)}." if cred.ingredients else ""
+    out.add("c2pa", f"Content credentials (C2PA) found, made{by}; {sig}.{parts}", 0.7)
+    if cred.ingredient_ai and not any(c2pa_check._is_ai(t) for t in cred.source_types):
+        if cred.trusted:
+            out.hits([Hit("ai", "c2pa_ingredient_ai", "Content credentials include an ingredient whose own content "
+                          "credentials declare generative AI.", 1.0)])
+        else:
+            out.add("c2pa", "One of the ingredients has its own content credentials declaring generative AI. "
+                            "Untrusted credentials are informational only.", 0.3)
+    elif cred.ai_generated and cred.trusted:
         trained = any(t.rsplit("/", 1)[-1] == "trainedAlgorithmicMedia" for t in cred.source_types)
         key = "iptc_trained" if trained else "iptc_composite"
         source = next(t for t in cred.source_types if t.rsplit("/", 1)[-1] in c2pa_check.AI_SOURCE_TYPES)
@@ -293,7 +307,7 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
         out.hits([Hit("ai", key, "Content credentials declare this was made or changed with generative AI. "
                       f"Found in C2PA actions digitalSourceType: \u201c{snippet}\u201d", 1.0,
                       "C2PA actions digitalSourceType", snippet)])
-    elif cred.source_types:
+    if cred.source_types and not (cred.trusted and any(c2pa_check._is_ai(t) for t in cred.source_types)):
         kinds = ", ".join(dict.fromkeys(t.rsplit("/", 1)[-1] for t in cred.source_types))
         qualifier = "" if cred.trusted else " Untrusted credentials are informational only."
         generated = "" if cred.ai_generated else " (not generative AI)"
@@ -314,11 +328,19 @@ def _run_model(
         return None, "the detector failed on this file"
     if pred is None:
         return None, "the detector is not available on this server"
+    if not all(math.isfinite(x) for _, probs in pred.models() for x in probs):
+        log.warning("detector returned a non-finite score")
+        return None, "the detector returned an invalid score"
     tiers = pred.tiers()
     video_mode = kind == "video" and len(tiers) > 1
-    # Video: decide per frame, then take the tier a majority of the most suspicious half of frames reaches.
-    # Reported probabilities are the mean of each model's most suspicious half, as before.
+    # Video: decide per frame, then take the tier a majority of the most suspicious half of frames reaches. Any
+    # frame rated "likely" on its own makes the clip at least "possible": a partly synthetic clip is never reported
+    # as clean. Reported probabilities are the mean of each model's most suspicious half, as before.
     decision = model.aggregate(tiers) if video_mode else tiers[0]
+    over = sum(t == "likely" for t in tiers)
+    some = sum(t == "possible" for t in tiers)
+    if video_mode and over and decision == "none":
+        decision = "possible"
     scores: list[ModelScore] = []
     for name, probs in pred.models():
         entry: ModelScore = {
@@ -333,8 +355,11 @@ def _run_model(
         "name": pred.display_name, "ai_probability": p, "decision": decision, "models": scores,
         "frames_checked": len(tiers),
     }
+    if low_colour:
+        info["low_colour"] = True
     coverage_note = partial = ""
     if kind == "video":
+        info["frames_likely"], info["frames_possible"] = over, some
         info["frame_probabilities"] = [round(x, 4) for x in primary]
         if timestamps and len(timestamps) == len(tiers):
             first, last = timestamps[0], timestamps[-1]
@@ -345,36 +370,57 @@ def _run_model(
             if dur and dur > 2 and last < 0.75 * dur:
                 partial = (f"The detector only reached {last:.1f} s of this {dur:.1f} s video (time limit), "
                            "so the rest was not checked.")
-    over = sum(t == "likely" for t in tiers)
+    # when only some frames are "likely", the "possible" wording below states the count itself
+    count_note = "" if decision == "possible" and over else f"; {over} of {len(tiers)} rated likely AI"
     frames_note = (
-        f" (based on the most suspicious half of {len(tiers)} sampled frames{coverage_note}; "
-        f"{over} of {len(tiers)} rated likely AI)"
+        f" (based on the most suspicious half of {len(tiers)} sampled frames{coverage_note}{count_note})"
         if video_mode else ""
     )
     weight = max(s["ai_probability"] for s in scores)
     score_text = _scores_text(scores)
+    single = not pred.agreement  # a single configured model (BTF_MODEL_ENSEMBLE=off)
+    our = "Our detector model" if single else "Our detector models"
     if pred.missing:
         out.add("info", f"One of the two detector models ({pred.missing}) could not be loaded, so this result comes from "
                         "one model only and can at most show possible signs of AI.", 0.2)
-    if not pred.agreement:  # a single configured model (BTF_MODEL_ENSEMBLE=off)
-        if decision == "likely":
-            out.add("model", f"Our detector model rates this {score_text} likely to be AI-generated{frames_note}. Detectors can be wrong.", weight)
-        elif decision == "possible":
-            out.add("model", f"Our detector model sees possible signs of AI generation ({score_text}){frames_note}. Not conclusive.", weight)
-        elif not low_colour:
-            out.add("model", f"Our detector model found no strong AI signal ({score_text}){frames_note}. Detectors miss many fakes, so this does not mean it is real.", weight)
+    if low_colour:
+        # Outside the reliable range the scores are shown for reference only, in neutral wording for every tier.
+        out.add("model", f"{our} scored this image {score_text}, but black-and-white and low-colour images are outside "
+                         "their reliable range, so these scores do not point either way.", 0.1)
     elif decision == "likely":
-        out.add("model", f"Both detector models agree this looks AI-generated ({score_text}){frames_note}. Detectors can be wrong.", weight)
+        if single:
+            out.add("model", f"Our detector model rates this {score_text} likely to be AI-generated{frames_note}. Detectors can be wrong.", weight)
+        else:
+            out.add("model", f"Both detector models agree this looks AI-generated ({score_text}){frames_note}. Detectors can be wrong.", weight)
     elif decision == "possible":
-        why = "only one detector model was available" if pred.missing else "the two detector models do not both agree"
-        out.add("model", f"Our detector models see possible signs of AI generation ({score_text}){frames_note}, but {why}. Not conclusive.", weight)
-    elif not low_colour:
-        out.add("model", f"Our detector models found no strong AI signal ({score_text}){frames_note}. Detectors miss many fakes, so this does not mean it is real.", weight)
+        if video_mode and over:
+            why = (f"only {over} of {len(tiers)} sampled frames were individually rated likely AI-generated, too few "
+                   "to call the whole clip likely")
+        elif pred.missing:
+            why = "only one detector model was available"
+        elif single:
+            why = ""
+        else:
+            why = "the two detector models do not both agree"
+        sees = "sees" if single else "see"
+        tail = f", but {why}" if why else ""
+        out.add("model", f"{our} {sees} possible signs of AI generation ({score_text}){frames_note}{tail}. Not conclusive.", weight)
+    elif video_mode and some:
+        out.add("model", f"{our} found no consistent AI signal across the clip ({score_text}){frames_note}, but {some} of "
+                         f"{len(tiers)} sampled frames individually showed possible signs. Not conclusive, and this does "
+                         "not mean it is real.", weight)
+    else:
+        out.add("model", f"{our} found no strong AI signal ({score_text}){frames_note}. Detectors miss many fakes, so this does not mean it is real.", weight)
     if partial:
         out.add("info", partial, 0.2)
     if kind == "video" and duration is None:
         out.add("info", "The video duration is unknown, so detector coverage may be partial.", 0.2)
     return info, None
+
+
+def _ingredients_text(cred) -> str:
+    n = len(cred.ingredients)
+    return f"{n} ingredient{'' if n == 1 else 's'} (other files placed or combined into this one)"
 
 
 def _scores_text(scores: list[ModelScore]) -> str:
@@ -394,13 +440,14 @@ def _verdict(
 ) -> tuple[Verdict, str, str]:
     decision = model_info["decision"] if model_info else None
     scores = _scores_text(model_info["models"]) if model_info else "n/a"
+    parts = f" The credentials include {_ingredients_text(cred)}." if cred is not None and cred.ingredients else ""
     if cred is not None and cred.readable and cred.valid and cred.trusted and cred.capture:
         signer = cred.signer or cred.issuer or "a trusted signer"
         if cred.edit_actions:
             edits = ", ".join(_action_name(a) for a in cred.edit_actions[:6])
             return (
                 "verified_capture", "Verified capture with recorded edits",
-                f"Trusted credentials signed by {signer} declare a camera capture; recorded edits: {edits}. "
+                f"Trusted credentials signed by {signer} declare a camera capture; recorded edits: {edits}.{parts} "
                 "The file is unchanged since the latest signed edit. This confirms the signed provenance, not that the scene "
                 "itself is real (for example, it could be a photo of a screen).",
             )
@@ -411,9 +458,15 @@ def _verdict(
         )
     if cred is not None and cred.readable and cred.valid and cred.trusted and cred.ai_generated:
         signer = cred.signer or cred.issuer or "a trusted signer"
+        if not any(c2pa_check._is_ai(t) for t in cred.source_types):  # declared only by an ingredient
+            return (
+                "verified_ai", "Verified AI provenance",
+                f"Trusted content credentials signed by {signer} include {_ingredients_text(cred)}, and an ingredient's "
+                "own content credentials declare generative AI. The file is unchanged since signing.",
+            )
         return (
             "verified_ai", "Verified AI provenance",
-            f"Trusted content credentials signed by {signer} declare generative AI, and the file is unchanged since signing.",
+            f"Trusted content credentials signed by {signer} declare generative AI, and the file is unchanged since signing.{parts}",
         )
     if out.has("ai"):
         declared = cred is not None and cred.readable and cred.valid and cred.ai_generated
@@ -445,10 +498,16 @@ def _verdict(
             f"({scores}) cannot give an AI verdict either way. {NO_PROOF}",
         )
     if decision == "possible":
+        likely_frames = model_info.get("frames_likely", 0) if model_info else 0
+        frames = (
+            f" {likely_frames} of {model_info['frames_checked']} sampled frames were individually rated likely "
+            "AI-generated, so part of the clip may be synthetic."
+            if likely_frames and model_info["frames_checked"] > 1 else ""
+        )
         return (
             "unknown",
             "Possible signs of AI generation",
-            f"Our detector model sees some signs of AI ({scores}), but not enough to say so. {NO_PROOF}",
+            f"Our detector model sees some signs of AI ({scores}), but not enough to say so.{frames} {NO_PROOF}",
         )
     if out.has("camera"):
         return (

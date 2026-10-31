@@ -162,7 +162,7 @@ def test_video_decides_per_frame(client, monkeypatch):
     assert body["verdict_title"] == "Possible signs of AI generation"
     assert len(m["frame_probabilities"]) == 8 and all(len(s["frame_probabilities"]) == 8 for s in m["models"])
     assert m["models"][1]["ai_probability"] == pytest.approx((0.9 + 0.9 + 0.01 + 0.01) / 4, abs=1e-4)
-    assert "2 of 8 rated likely AI" in model_texts(body)[0]
+    assert "2 of 8 sampled frames were individually rated likely AI-generated" in model_texts(body)[0]
 
 
 def test_frontend_shows_both_scores_and_agreement_note(client):

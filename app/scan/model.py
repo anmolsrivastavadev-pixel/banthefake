@@ -23,6 +23,7 @@ downloads). Custom model ids get no default revision: set the matching *_REVISIO
 
 import importlib.util
 import logging
+import math
 import os
 import threading
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ BATCH = 8
 
 _OFF = ("off", "0", "false", "no")
 
-Status = Literal["loaded", "loading", "off", "unavailable"]
+Status = Literal["loaded", "degraded", "loading", "off", "unavailable"]
 Tier = Literal["likely", "possible", "none"]
 TIER_RANK: dict[Tier, int] = {"none": 0, "possible": 1, "likely": 2}
 
@@ -130,6 +131,9 @@ class _Detector:
                 else:
                     probs = logits.softmax(-1)[:, self._positive]
                 out.extend(float(p) for p in probs)
+        if not all(math.isfinite(p) for p in out):
+            # NaN/inf would otherwise slip through the threshold comparisons (and break JSON): treat as a failure
+            raise ValueError(f"detector {self.short_name()} returned a non-finite score")
         return out
 
 
@@ -190,14 +194,14 @@ def _active() -> list[_Detector]:
 
 
 def status() -> Status:
-    """"loaded" once every configured model has loaded or failed and at least one works."""
+    """"loaded" once every configured model has loaded; "degraded" if one of two failed and the other works."""
     if not enabled():
         return "off"
     active = _active()
     if not deps_installed() or all(d.failed for d in active):
         return "unavailable"
     if all(d.loaded or d.failed for d in active):
-        return "loaded"
+        return "degraded" if any(d.failed for d in active) else "loaded"
     return "loading"  # warming up in the background, or will load on the first scan
 
 

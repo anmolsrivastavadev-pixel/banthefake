@@ -15,6 +15,11 @@ are shipped as the trust data required to verify claims against that public sche
 `anchors.pem` from the research directory is deliberately excluded: its source and redistribution
 terms have not been confirmed.
 
+Only `C2PA-TRUST-LIST.pem` is loaded as trust anchors. c2pa-python 0.38 pools all configured anchors when it
+checks the signing certificate, whatever their `trust_kind`, so loading `C2PA-TSA-TRUST-LIST.pem` would let a
+timestamp-authority root make a manifest signer trusted. The TSA list is kept here for reference and for a future
+library version that keeps the two lists apart.
+
 To update, download the current official files from the conformance URL, verify their issue and next
 update fields, replace all three files together, update `VERSION` and the dates above, run the C2PA
 integration tests, and verify that test certificates remain untrusted. OCSP and remote manifest fetch

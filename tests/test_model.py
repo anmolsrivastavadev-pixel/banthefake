@@ -104,7 +104,8 @@ def test_primary_load_failure_degrades_to_possible(client, monkeypatch):
     m = body["model"]
     assert m["decision"] == "possible" and [s["name"] for s in m["models"]] == ["CommunityForensics-DeepfakeDet-ViT"]
     assert any("could not be loaded" in s["text"] for s in body["signals"] if s["kind"] == "info")
-    assert model.status() == "loaded"
+    assert model.status() == "degraded"
+    assert client.get("/api/health").json()["model"] == "degraded"
 
 
 def test_e2e_low_score_never_says_real(client):

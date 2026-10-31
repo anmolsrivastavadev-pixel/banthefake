@@ -79,8 +79,8 @@ def test_report_shape_and_agents():
     )
     assert r.trusted and r.software_agents == ["GPT-4o"] and r.edit_actions == ["c2pa.resized"]
     assert set(r.to_report()) == {
-        "present", "valid", "trusted", "generator", "issuer", "signer", "signed_at", "capture",
-        "ai_generated", "actions", "edits", "ingredients", "trust_list_version",
+        "present", "valid", "trusted", "generator", "issuer", "signer", "signed_at", "capture", "claimed_capture",
+        "ai_generated", "ingredient_ai", "actions", "edits", "ingredients", "trust_list_version",
     }
     assert r.generator == "ChatGPT 1.0"
 
@@ -93,12 +93,15 @@ def test_official_pixel_capture_is_trusted():
     assert r.trust_list_version == "2026-10-23"
 
 
-def test_official_signer_and_timestamp_roots_are_separate():
+def test_only_signer_roots_are_trust_anchors():
+    """c2pa-python pools all anchors whatever their trust_kind, so the TSA list must not be loaded at all."""
     settings = c2pa_check._context_settings("official")
     anchors = settings["trust"]["anchors"]
-    assert [entry["trust_kind"] for entry in anchors] == ["manifest", "tsa"]
+    assert [entry["trust_kind"] for entry in anchors] == ["manifest"]
+    assert anchors[0]["trust_anchors"] == (c2pa_check.TRUST_DIR / "C2PA-TRUST-LIST.pem").read_text()
     assert "trust_anchors" not in settings["trust"]
     assert "trust_config" not in settings["trust"]
+    assert settings["verify"]["verify_timestamp_trust"] is True  # timestamps are still checked
 
 
 def test_test_certificates_stay_untrusted():

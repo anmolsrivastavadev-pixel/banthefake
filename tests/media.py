@@ -203,3 +203,39 @@ def fake_predict(h: float | None, c: float | None = -1.0):
         return model.Prediction(h=None if h is None else [h] * n, c=None if c is None else [c] * n)
 
     return predict
+
+
+def clip_from_images(paths: list, seconds_each: float = 1.0, fps: int = 10, size: int = 640) -> bytes:
+    """An H.264 MP4 showing each image (resized to size x size) for `seconds_each`, in order."""
+    import tempfile
+    from pathlib import Path
+
+    import av
+    import numpy as np
+
+    frames = [np.asarray(Image.open(p).convert("RGB").resize((size, size))) for p in paths]
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "clip.mp4"
+        with av.open(str(path), "w", format="mp4") as out:
+            st = out.add_stream("h264", rate=fps)
+            st.width = st.height = size
+            st.pix_fmt = "yuv420p"
+            for arr in frames:
+                for _ in range(int(fps * seconds_each)):
+                    for packet in st.encode(av.VideoFrame.from_ndarray(arr, format="rgb24")):
+                        out.mux(packet)
+            for packet in st.encode():
+                out.mux(packet)
+        return path.read_bytes()
+
+
+def fake_frame_predict(h_frames: list[float], c_frames: list[float]):
+    """A stand-in for `model.predict` scoring image i with h_frames[i] / c_frames[i] (cycled)."""
+    from app.scan import model
+
+    def predict(images):
+        n = len(images)
+        return model.Prediction(h=[h_frames[i % len(h_frames)] for i in range(n)],
+                                c=[c_frames[i % len(c_frames)] for i in range(n)])
+
+    return predict

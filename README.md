@@ -70,7 +70,18 @@ Read this before you rely on a result.
   retried in a tolerant mode and analyzed as far as they can be read, with a note saying so.
 - **C2PA trust is checked offline.** The app ships the official C2PA signing and timestamp trust lists. Remote
   manifests and OCSP fetches stay disabled. A cryptographically valid manifest from a signer outside that list
-  is reported as untrusted and remains informational; it never drives a verified verdict.
+  is reported as untrusted and remains informational; it never drives a verified verdict. Only the signing
+  list is loaded as trust anchors: c2pa-python pools every anchor whatever its kind, so loading the TSA list
+  would let a timestamp-authority root make a manifest signer "trusted". Timestamps are still validated and
+  their trust is still checked against the signing list, but an untrusted timestamp is informational only.
+  Claims in an untrusted or invalid manifest (capture, signer, AI declarations) are shown as "Claimed (not
+  verified)", never as facts. `c2pa.placed` and `c2pa.unknown` actions count as edits, and the report says how
+  many ingredients the credentials include. If an ingredient's own manifest declares generative AI, trusted
+  credentials give `verified_ai` and untrusted ones an informational note.
+- **Partly synthetic videos.** The clip decision is the tier reached by a majority of the most suspicious half
+  of sampled frames, but if any sampled frame is individually rated "likely", the clip is at least "possible"
+  and the report says how many frames were. A video with any "likely" or "possible" frame is never described
+  as having "no strong AI signal".
 
 ## Quickstart
 
@@ -83,7 +94,8 @@ uv run uvicorn app.main:app --reload
 Open <http://127.0.0.1:8000>.
 
 With the `ml` extra installed, both detector models load in the background at startup (`/api/health` reports
-`"model": "loading"`, then `"loaded"`). On first use they download about 840 MB of weights from the Hugging Face
+`"model": "loading"`, then `"loaded"`, or `"degraded"` if one of the two models failed to load and the other
+runs). On first use they download about 840 MB of weights from the Hugging Face
 Hub into `HF_HOME`. Set `BTF_MODEL=off` to disable the detector. Budget about 2.5 GB of RAM for the process
 (see [Detector models](#detector-models)).
 
@@ -151,8 +163,9 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_MODEL_THREADS` | unset (torch default) | Integer passed to `torch.set_num_threads`. |
 | `BTF_MAX_IMAGE_PIXELS` | `120000000` | Images larger than this many pixels are refused (decompression-bomb guard). |
 | `BTF_MAX_DECODE_PIXELS` | `25000000` | Largest image decoded at full size for the detector. JPEGs above it are decoded at 1/2, 1/4 or 1/8 scale; other formats above it are not analyzed by the detector (the report says so). |
-| `BTF_C2PA_TRUST` | `official` | `official` uses the bundled C2PA signing and timestamp trust lists. `off` disables signer trust, so no manifest receives a verified verdict. |
-| `BTF_C2PA_TRUST_ANCHORS` | unset | Path to a PEM file of trusted C2PA roots. When set, this replaces the bundled anchors. The bundled `store.cfg` EKU policy is still applied. |
+| `BTF_C2PA_TRUST` | `official` | `official` uses the bundled C2PA signing trust list (see "C2PA trust is checked offline" for why the TSA list is not loaded). `off` disables signer trust, so no manifest receives a verified verdict. |
+| `BTF_C2PA_TRUST_ANCHORS` | unset | Path to a PEM file of trusted C2PA signer roots. By default this **replaces** the official list, so official signers (for example Google Pixel) are no longer trusted. Trusted results then report `trust_list_version: "custom"`. If the file is missing, unreadable or contains no PEM certificate, an error is logged and **no** signer is trusted (it never silently falls back to the official list). |
+| `BTF_C2PA_TRUST_ANCHORS_MODE` | `replace` | `append` trusts the official list **and** the `BTF_C2PA_TRUST_ANCHORS` roots; trusted results then report `trust_list_version: "<official date>+custom"`. |
 | `HF_HOME` | `~/.cache/huggingface`. The Docker image sets `/opt/hf` | Hugging Face cache for the detector weights. Set `HF_HUB_OFFLINE=1` to forbid downloads. |
 
 ## API
@@ -164,7 +177,7 @@ Every response, error responses included, carries a strict CSP, `X-Content-Type-
 
 | Method and path | Body | Success | Errors |
 |---|---|---|---|
-| `GET /api/health` | none | 200 `{"ok": true, "model": "loaded"\|"loading"\|"off"\|"unavailable", "c2pa": bool}` | none |
+| `GET /api/health` | none | 200 `{"ok": true, "model": "loaded"\|"degraded"\|"loading"\|"off"\|"unavailable", "c2pa": bool}` (`degraded`: one of the two detector models failed to load) | none |
 | `POST /api/scan` | `multipart/form-data`, field `file` | 200 scan report (below) | 400 (not multipart, no `file` field, empty, malformed or unterminated upload, client disconnected), 413 too large, 415 unsupported type (also audio-only MP4), 429 rate limited, 503 `busy` (no scan slot within `BTF_SCAN_WAIT_S`), 500 scan failed |
 | `POST /api/petition` | `application/json`, at most 16 KB: `{"name", "email", "location"?, "consent": true, "website"?}` | 201 `{"ok": true}` | 400 body is not a JSON object, 409 `already_signed`, 413 body over 16 KB, 415 not `application/json`, 422 validation, 429 rate limited |
 | `GET /api/petition/count` | none | 200 `{"count": int, "goal": int}` | none |
@@ -216,23 +229,31 @@ Example scan report:
 `verdict` is one of `verified_capture`, `verified_ai`, `ai`, `edited`, `camera` or `unknown`.
 `verified_capture` requires a fully valid manifest from a trusted signer with a `c2pa.created` action whose
 digital source type is `digitalCapture` or `computationalCapture`, and no generative-AI source type.
-`verified_ai` requires a fully valid, trusted manifest declaring trained-algorithmic media. Valid but
+`verified_ai` requires a fully valid, trusted manifest declaring trained-algorithmic media, itself or in an
+ingredient's own manifest. Valid but
 untrusted manifests remain informational. The `kind` of a signal is one of `ai`, `edit`,
 `camera`, `c2pa`, `model` or `info`. Marker signals (`ai`, `edit`) also have `field` (where the marker was
 found) and `snippet` (the matched text, at most 80 characters). When present, `c2pa` has the fields `present`,
-`valid`, `trusted`, `generator`, `issuer`, `signer`, `signed_at`, `capture`, `ai_generated`, `actions`,
-`edits`, `ingredients` and `trust_list_version`.
+`valid`, `trusted`, `generator`, `issuer`, `signer`, `signed_at`, `capture`, `claimed_capture`,
+`ai_generated`, `ingredient_ai`, `actions`, `edits`, `ingredients` and `trust_list_version`. `capture` is true
+only for a valid manifest from a trusted signer; `claimed_capture` is the manifest's own claim, verified or not.
+`ai_generated` also covers an AI declaration in an ingredient's manifest (`ingredient_ai`); such ingredients
+carry `"ai_generated": "true"`. Generator, signer and signing time come from the manifest and are only
+verified when `valid` and `trusted` are both true.
 
 When present, `model` has these fields:
 
 - `decision` (`likely`, `possible` or `none`) is the combined result that drives the verdict.
 - `models` lists every model that ran, primary first, as `{name, ai_probability}`.
+- `low_colour: true` is present when the image is black-and-white or low-colour: the scores are then shown for
+  reference only and never indicate either way.
 - `ai_probability` is kept for compatibility. It is the **primary** model's probability, or the only model's
   when just one ran (one failed to load, or `BTF_MODEL_ENSEMBLE=off`). Do not threshold it yourself; use
   `decision`.
 
 For videos, each `ai_probability` is the mean of that model's most suspicious half of frames. `model` also has
-`frame_probabilities` (primary model), `frame_timestamps` and `coverage` (`first_s`, `last_s`, `duration_s`).
+`frame_probabilities` (primary model), `frame_timestamps`, `coverage` (`first_s`, `last_s`, `duration_s`), and
+`frames_likely` / `frames_possible` (sampled frames individually rated "likely" / "possible").
 Each `models` entry also has its own `frame_probabilities`.
 
 ### Updating the C2PA trust list

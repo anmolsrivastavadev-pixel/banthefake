@@ -125,20 +125,28 @@ function c2paBlock(c) {
   let signature = 'Does NOT validate: the file may have been changed after signing';
   if (c.valid && c.trusted) signature = 'Valid, signer is on the trust list';
   else if (c.valid) signature = 'Intact, but the signer is not on our trust list';
+  // Only a valid manifest from a trusted signer is evidence; anything else is shown as an unverified claim.
+  const verified = Boolean(c.valid && c.trusted);
+  const claim = v => (v && !verified ? `Claimed (not verified): ${v}` : v);
   const actions = (c.actions || []).map(a => a.replace(/^c2pa\./, '').replace(/_/g, ' '));
   const edits = (c.edits || []).map(a => a.replace(/^c2pa\./, '').replace(/_/g, ' '));
-  const ingredients = (c.ingredients || []).map(i => [i.title, i.format, i.relationship].filter(Boolean).join(' · '));
+  const ingredients = (c.ingredients || []).map(i => [i.title, i.format, i.relationship, i.ai_generated ? 'declares generative AI' : ''].filter(Boolean).join(' · '));
+  let aiRow = 'Not declared';
+  if (c.ai_generated) aiRow = claim(c.ingredient_ai ? 'Yes, declared by an ingredient\'s own credentials' : 'Yes, declared in the credentials');
+  let captureRow = 'Not declared';
+  if (c.capture && verified) captureRow = 'Yes, declared as a camera capture';
+  else if (c.claimed_capture || c.capture) captureRow = 'Claimed (not verified): declared as a camera capture';
   let signedAt = c.signed_at;
   if (signedAt) {
     const d = new Date(signedAt);
     if (!Number.isNaN(d.getTime())) signedAt = d.toLocaleString();
   }
   const b = block('Content credentials (C2PA)', [
-    ['AI-generated', c.ai_generated ? 'Yes, declared in the credentials' : 'Not declared'],
-    ['Capture evidence', c.capture ? 'Yes, declared as a camera capture' : 'Not declared'],
-    ['Made with', c.generator],
-    ['Signed by', c.signer || c.issuer],
-    ['Signed at', signedAt],
+    ['AI-generated', aiRow],
+    ['Capture evidence', captureRow],
+    ['Made with', claim(c.generator)],
+    ['Signed by', claim(c.signer || c.issuer)],
+    ['Signed at', claim(signedAt)],
     ['Signature', signature],
     ['Trust list', c.trust_list_version],
     ['Actions', actions.join(', ')],
@@ -170,10 +178,16 @@ const DECISION_READING = {
   none: 'No strong AI signal',
 };
 
+// Black-and-white and low-colour images are outside the detectors' reliable range: neutral for every tier.
+const LOW_COLOUR_READING = 'Not reliable for black-and-white or low-colour images (scores shown for reference only)';
+
 function modelBlock(m) {
   const p = m.ai_probability;
   const models = Array.isArray(m.models) && m.models.length ? m.models : [{ name: m.name, ai_probability: p }];
-  const reading = DECISION_READING[m.decision] || '';
+  let reading = DECISION_READING[m.decision] || '';
+  if (m.low_colour) reading = LOW_COLOUR_READING;
+  else if (m.decision === 'none' && (m.frames_likely || m.frames_possible)) reading = 'No consistent AI signal across the clip';
+  else if (m.decision === 'possible' && m.frames_likely) reading = `Possible signs of AI: ${m.frames_likely} of ${m.frames_checked} frames rated likely AI-generated`;
   const b = block('AI detector models', [
     ['Setup', m.name],
     ['Combined reading', reading],
