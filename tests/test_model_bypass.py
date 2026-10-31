@@ -58,7 +58,9 @@ def test_truncated_jpeg_does_not_flip_global_pillow_flag(tmp_path):
 def test_truncated_png_with_too_few_pixels_is_not_scored(client, detector):
     data = media.photo_png()
     idat = data.index(b"IDAT")
-    body = scan(client, "t.png", data[: idat + 200])
+    idat_len = int.from_bytes(data[idat - 4 : idat], "big")
+    # Keep ~5% of the compressed pixels: far from the 20% threshold whatever zlib build compressed it.
+    body = scan(client, "t.png", data[: idat + 4 + idat_len // 20])
     assert body["model"] is None
     assert "less than 20%" in texts(body)
     assert ImageFile.LOAD_TRUNCATED_IMAGES is False
