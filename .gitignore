@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 data/
 research/
+deploy/hetzner/.env

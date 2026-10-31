@@ -1,0 +1,32 @@
+# Caddy in front of BanTheFake: automatic HTTPS (Let's Encrypt / ZeroSSL), HTTP->HTTPS redirect, HTTP/3.
+# BTF_DOMAIN and ACME_EMAIL come from deploy/hetzner/.env via docker-compose.yml.
+# No `log` directive: Caddy writes no access log by default, which keeps visitor IPs out of the logs
+# (see the Privacy section of README.md). Do not add one without updating static/privacy.html.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$BTF_DOMAIN} {
+	encode zstd gzip
+
+	# Slightly above BTF_MAX_UPLOAD_MB (default 50) for multipart overhead. Raise both together.
+	request_body {
+		max_size 55MB
+	}
+
+	header Strict-Transport-Security "max-age=31536000"
+
+	reverse_proxy 127.0.0.1:8000 {
+		# During a restart the app refuses connections for a few seconds; hold requests and retry
+		# instead of answering 502. Only failed dials are retried for POSTs, so no scan runs twice.
+		lb_try_duration 30s
+		lb_try_interval 1s
+
+		transport http {
+			dial_timeout 3s
+			# Video scans can take tens of seconds (plus queueing up to BTF_SCAN_WAIT_S).
+			response_header_timeout 120s
+		}
+	}
+}

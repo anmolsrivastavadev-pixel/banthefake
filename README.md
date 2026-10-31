@@ -322,6 +322,9 @@ curl -fsS -X DELETE -H "Authorization: Bearer $BTF_ADMIN_TOKEN" \
 
 ## Deployment
 
+For a step-by-step production setup (hosting options and costs, a VPS with Docker Compose and Caddy, or
+Fly.io, plus backups, updates and a pre-launch checklist), see [`docs/DEPLOY.md`](docs/DEPLOY.md).
+
 ### Docker
 
 ```bash
