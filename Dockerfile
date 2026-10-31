@@ -39,14 +39,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # 3) Bake the detector weights into the image so the container never needs the network.
 ARG BTF_MODEL_ID=buildborderless/CommunityForensics-DeepfakeDet-ViT
-ENV BTF_MODEL_ID=${BTF_MODEL_ID}
+ARG BTF_MODEL_REVISION=
+ENV BTF_MODEL_ID=${BTF_MODEL_ID} \
+    BTF_MODEL_REVISION=${BTF_MODEL_REVISION}
 RUN /app/.venv/bin/python -c "\
 import os; \
 from transformers import AutoImageProcessor, AutoModelForImageClassification; \
-mid = os.environ['BTF_MODEL_ID']; \
-AutoImageProcessor.from_pretrained(mid); \
-AutoModelForImageClassification.from_pretrained(mid); \
-print('cached', mid)"
+mid = os.environ['BTF_MODEL_ID']; default_id = 'buildborderless/CommunityForensics-DeepfakeDet-ViT'; \
+revision = os.environ['BTF_MODEL_REVISION'] or ('ac6ee457bea904a373065754107451793b56db00' if mid == default_id else None); \
+AutoImageProcessor.from_pretrained(mid, revision=revision); \
+AutoModelForImageClassification.from_pretrained(mid, revision=revision, use_safetensors=True); \
+print('cached', mid, revision)"
 
 # 4) Application code.
 COPY app ./app

@@ -37,7 +37,10 @@ Read this before you rely on a result.
   8 frames spread over the whole clip, with a 20 s decode budget). On videos with keyframes far apart the
   sampler decodes forward in one pass instead of seeking; the report says which part of the clip was covered
   (`model.coverage`), and adds a note when the time budget ran out early. It is not trained to find a face
-  swapped into an otherwise real photo or video.
+  swapped into an otherwise real photo or video. A dedicated face detector was researched but not shipped:
+  the credible checkpoint has unresolved training-data rights, high CPU/RAM cost, and no openly licensed
+  benchmark large enough to establish its false-positive rate. `docs/LIMITS-PLAN.md` records the gates for
+  revisiting it.
 - **Brand names only count where software is named.** A tool name such as "Midjourney" or "Firefly" is only
   treated as a marker in fields that name the creating software: EXIF `Software`/`ProcessingSoftware`, XMP
   `CreatorTool`/history `softwareAgent`, PNG generator keys (`parameters`, `prompt`, `workflow`, `Software`),
@@ -84,6 +87,7 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_ADMIN_TOKEN` | unset | Bearer token for export and erase. While it is unset, the admin endpoints return 404. |
 | `BTF_MODEL` | `auto` | `off`, `0`, `false` or `no` disables the ML detector. Any other value enables it when the `ml` extra is installed. |
 | `BTF_MODEL_ID` | `buildborderless/CommunityForensics-DeepfakeDet-ViT` | Hugging Face model id or local path for the detector. It must be an image-classification model with a single "AI" logit or a fake/real head. |
+| `BTF_MODEL_REVISION` | pinned commit for the default model; unset for a custom model | Exact Hugging Face commit/tag to load. Set this when using a remote custom model so deployments are reproducible. |
 | `BTF_MODEL_THREADS` | unset (torch default) | Integer passed to `torch.set_num_threads`. |
 | `BTF_MAX_IMAGE_PIXELS` | `120000000` | Images larger than this many pixels are refused (decompression-bomb guard). |
 | `BTF_MAX_DECODE_PIXELS` | `25000000` | Largest image decoded at full size for the detector. JPEGs above it are decoded at 1/2, 1/4 or 1/8 scale; other formats above it are not analyzed by the detector (the report says so). |

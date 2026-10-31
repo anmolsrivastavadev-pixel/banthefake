@@ -1,8 +1,8 @@
 """Optional AI-image detector (ViT, single logit, sigmoid = P(AI-generated)).
 
 Needs the `ml` extra (torch + transformers). Lazy-loaded once, thread-safe. Disabled with BTF_MODEL=off.
-Model id can be overridden with BTF_MODEL_ID; weights are fetched from the Hugging Face Hub on first use
-(set HF_HOME to control the cache, HF_HUB_OFFLINE=1 to forbid downloads).
+Model id and revision can be overridden with BTF_MODEL_ID and BTF_MODEL_REVISION; weights are fetched from
+the Hugging Face Hub on first use (set HF_HOME to control the cache, HF_HUB_OFFLINE=1 to forbid downloads).
 """
 
 import importlib.util
@@ -16,6 +16,7 @@ from PIL import Image
 log = logging.getLogger("banthefake.model")
 
 DEFAULT_MODEL_ID = "buildborderless/CommunityForensics-DeepfakeDet-ViT"
+DEFAULT_MODEL_REVISION = "ac6ee457bea904a373065754107451793b56db00"
 LIKELY = 0.85  # >= : "likely AI"
 POSSIBLE = 0.5  # >= : "possible signs"
 BATCH = 8
@@ -32,6 +33,13 @@ _loading = False
 
 def model_id() -> str:
     return os.environ.get("BTF_MODEL_ID", "").strip() or DEFAULT_MODEL_ID
+
+
+def model_revision() -> str | None:
+    override = os.environ.get("BTF_MODEL_REVISION", "").strip()
+    if override:
+        return override
+    return DEFAULT_MODEL_REVISION if model_id() == DEFAULT_MODEL_ID else None
 
 
 def enabled() -> bool:
@@ -73,9 +81,13 @@ def _load() -> bool:
             if threads and threads.isdigit():
                 torch.set_num_threads(int(threads))
             mid = model_id()
-            _processor = AutoImageProcessor.from_pretrained(mid)
-            _model = AutoModelForImageClassification.from_pretrained(mid).eval()
-            log.info("loaded model %s", mid)
+            revision = model_revision()
+            options = {"revision": revision} if revision else {}
+            _processor = AutoImageProcessor.from_pretrained(mid, **options)
+            _model = AutoModelForImageClassification.from_pretrained(
+                mid, use_safetensors=True, **options
+            ).eval()
+            log.info("loaded model %s at revision %s", mid, revision or "default")
             return True
         except Exception:
             log.exception("could not load detector model")

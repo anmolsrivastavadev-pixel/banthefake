@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BTF_MODEL_ID: buildborderless/CommunityForensics-DeepfakeDet-ViT
+      BTF_MODEL_REVISION: ac6ee457bea904a373065754107451793b56db00
       HF_HOME: ${{ github.workspace }}/.cache/huggingface
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +51,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.HF_HOME }}
-          key: hf-${{ runner.os }}-${{ env.BTF_MODEL_ID }}
+          key: hf-${{ runner.os }}-${{ env.BTF_MODEL_ID }}-${{ env.BTF_MODEL_REVISION }}
       - run: uv run pytest -q -m ml
         env:
           UV_NO_SYNC: "1"

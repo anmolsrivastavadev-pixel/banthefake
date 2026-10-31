@@ -12,6 +12,20 @@ AI = ["ai_dalle_mars.jpg", "ai_dalle_cat_q70_640.jpg", "ai_face_stylegan.jpg"]
 REAL = ["real_bridge.jpg", "real_cat_q70_640.jpg", "real_face_truman.jpg", "real_cat_camera_exif.jpg"]
 
 
+def test_default_model_revision_is_pinned(monkeypatch):
+    monkeypatch.delenv("BTF_MODEL_ID", raising=False)
+    monkeypatch.delenv("BTF_MODEL_REVISION", raising=False)
+    assert model.model_revision() == model.DEFAULT_MODEL_REVISION
+
+
+def test_custom_model_requires_explicit_revision(monkeypatch):
+    monkeypatch.setenv("BTF_MODEL_ID", "local/custom-model")
+    monkeypatch.delenv("BTF_MODEL_REVISION", raising=False)
+    assert model.model_revision() is None
+    monkeypatch.setenv("BTF_MODEL_REVISION", "reviewed-commit")
+    assert model.model_revision() == "reviewed-commit"
+
+
 def score(name):
     from app.scan import exif
 
