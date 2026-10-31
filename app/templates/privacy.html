@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+<!-- Template: rendered by app/main.py with BTF_PRIVACY_CONTACT substituted (HTML-escaped). -->
 
 <a class="skip" href="#main">Skip to content</a>
 
@@ -29,9 +30,9 @@
 
       <div class="contact-box">
         <h2>Contact</h2>
-        <p>To ask a question, see what we hold about you, or have your petition signature deleted, email
-          <a href="mailto:privacy@YOUR-DOMAIN.example"><span class="mono">privacy@YOUR-DOMAIN.example</span></a>.</p>
-        <!-- Site operators: replace privacy@YOUR-DOMAIN.example with a real, monitored address before launch. -->
+        {{CONTACT_NOTICE}}
+        <p>To ask a question, see what we hold about you, or have your petition signature deleted, contact us at
+          {{CONTACT_LINK}}.</p>
       </div>
 
       <h2>The petition</h2>
@@ -47,7 +48,7 @@
       <p>Signatures are kept until they are deleted. The software does not delete them automatically.</p>
 
       <h2>Deleting your signature</h2>
-      <p>Email <a href="mailto:privacy@YOUR-DOMAIN.example"><span class="mono">privacy@YOUR-DOMAIN.example</span></a> from the address you signed with and ask us to delete your signature. An administrator removes it from the database, and it is no longer counted or exported.</p>
+      <p>Contact us at {{CONTACT_LINK}} and ask us to delete your signature. Give the email address you signed with (if you write by email, send it from that address). An administrator removes it from the database, and it is no longer counted or exported.</p>
 
       <h2>The media scanner</h2>
       <ul>
@@ -63,7 +64,7 @@
       <h2>IP addresses and logs</h2>
       <p>To stop abuse, the server limits how many scans, petition requests and failed attempts to access administrator tools can come from one IP address. It keeps full recent IP addresses in memory only, for up to about an hour after your last request covered by a limit (the longest limit window is one hour; expired addresses are removed within a minute after that), and then discards them. Full IP addresses are never written to disk or to the database, and they are cleared when the server restarts.</p>
       <p>Failed attempts to access administrator tools are logged as security warnings, but the software shortens IPv4 addresses to a /24 network and IPv6 addresses to a /48 network before logging them. It never logs the supplied administrator token. The shortened network may be retained in server logs according to the site operator's logging policy.</p>
-      <p>The standard BanTheFake server setup turns off web access logs, so visits are not logged by the app. If this site runs behind a hosting provider or proxy, that service may keep its own logs. Email us to ask what applies to this site.</p>
+      <p>The standard BanTheFake server setup turns off web access logs, so visits are not logged by the app. If this site runs behind a hosting provider or proxy, that service may keep its own logs. Contact us to ask what applies to this site.</p>
 
       <h2>Third parties</h2>
       <ul>

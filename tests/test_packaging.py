@@ -1,8 +1,12 @@
 """Portability: the locked c2pa-python must install on Linux, so the Docker image needs no fallback."""
 
 import re
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -31,7 +35,7 @@ def test_readme_documents_new_settings():
     for var in (
         "BTF_UPLOAD_TIMEOUT_S", "BTF_SCAN_CONCURRENCY", "BTF_SCAN_WAIT_S", "BTF_SIGN_ATTEMPT_RATE",
         "BTF_MAX_DECODE_PIXELS",
-        "BTF_CLIENT_IP_HEADER", "BTF_HSTS",
+        "BTF_CLIENT_IP_HEADER", "BTF_HSTS", "BTF_PRIVACY_CONTACT", "BTF_ENV",
     ):
         assert f"`{var}`" in readme, var
 

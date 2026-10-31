@@ -232,3 +232,4 @@ main:focus { outline: none; }
   input, select, textarea { font-size: 16px; }
   textarea { font-size: 13px; }
 }
+.config-warning { margin: 0 0 16px; padding: 12px 16px; border: 1px solid rgba(255,77,77,.5); background: var(--red-soft); border-radius: 8px; }

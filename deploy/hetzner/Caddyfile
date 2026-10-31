@@ -1,7 +1,7 @@
 # Caddy in front of BanTheFake: automatic HTTPS (Let's Encrypt / ZeroSSL), HTTP->HTTPS redirect, HTTP/3.
 # BTF_DOMAIN and ACME_EMAIL come from deploy/hetzner/.env via docker-compose.yml.
 # No `log` directive: Caddy writes no access log by default, which keeps visitor IPs out of the logs
-# (see the Privacy section of README.md). Do not add one without updating static/privacy.html.
+# (see the Privacy section of README.md). Do not add one without updating app/templates/privacy.html.
 
 {
 	email {$ACME_EMAIL}

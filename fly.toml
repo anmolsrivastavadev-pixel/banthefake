@@ -1,6 +1,6 @@
 # Fly.io config for BanTheFake (the alternative deployment; see docs/DEPLOY.md, "Option B").
 # Replace `app` and `primary_region` before the first deploy. Secrets (BTF_ADMIN_TOKEN) are set with
-# `fly secrets set`, never here.
+# `fly secrets set`, never here. BTF_PRIVACY_CONTACT must be set too (see [env]), or the app refuses to start.
 
 app = "banthefake-CHANGE-ME"
 primary_region = "fra"
@@ -12,6 +12,13 @@ kill_timeout = "30s"
 
 [env]
   BTF_DB_PATH = "/data/banthefake.db"
+  # Refuse to start without a real privacy contact.
+  BTF_ENV = "production"
+  # BTF_PRIVACY_CONTACT is required in production: a monitored email address or https:// URL shown on
+  # /privacy.html. It is deliberately NOT set here, so a deploy fails until you either run
+  #   fly secrets set --stage BTF_PRIVACY_CONTACT=privacy@your-domain.org
+  # or uncomment and edit the next line (it is public information, so [env] is fine too).
+  # BTF_PRIVACY_CONTACT = "privacy@your-domain.org"
   # Two vCPUs: match torch's thread count to them.
   BTF_MODEL_THREADS = "2"
   # 4 GB profile: 2.5 GB model peak + one worker capped at 1 GB, with the remaining headroom kept small.

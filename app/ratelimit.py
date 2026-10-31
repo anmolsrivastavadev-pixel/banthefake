@@ -7,7 +7,7 @@ from typing import ClassVar
 
 # How often every key is checked for expiry, at most. Together with the per-key pruning on each access
 # this bounds how long a key (a client IP) is kept: at most `window + SWEEP_INTERVAL` seconds after its
-# newest hit, i.e. about an hour for the hourly petition limits (see static/privacy.html).
+# newest hit, i.e. about an hour for the hourly petition limits (see app/templates/privacy.html).
 SWEEP_INTERVAL = 60.0
 
 

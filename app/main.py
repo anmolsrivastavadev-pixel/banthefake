@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import html
 import ipaddress
 import json
 import logging
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import MutableHeaders
@@ -19,7 +20,13 @@ from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import scan
-from app.config import Settings
+from app.config import (
+    PRIVACY_CONTACT_PLACEHOLDER,
+    ConfigError,
+    Settings,
+    is_placeholder_contact,
+    is_url_contact,
+)
 from app.petition import PetitionStore, ValidationError, validate
 from app.ratelimit import RateLimiter
 from app.sniff import sniff
@@ -51,6 +58,28 @@ SECURITY_HEADERS = {
 
 
 MAX_JSON_BODY = 16 * 1024  # petition / erase request bodies
+PRIVACY_TEMPLATE = Path(__file__).resolve().parent / "templates" / "privacy.html"
+CONTACT_NOT_CONFIGURED = (
+    '<p class="config-warning" role="note"><strong>Contact not configured.</strong> '
+    "This site's operator has not set a privacy contact (BTF_PRIVACY_CONTACT), so the address below is a "
+    "placeholder that does not work.</p>"
+)
+
+
+def render_privacy_page(settings: Settings) -> str:
+    """The privacy notice with the operator's contact substituted (HTML-escaped) into the template.
+
+    Without a real contact (only possible outside production, see Settings.check) the placeholder is shown
+    together with a visible "contact not configured" notice.
+    """
+    contact = settings.privacy_contact
+    placeholder = is_placeholder_contact(contact)
+    contact = contact or PRIVACY_CONTACT_PLACEHOLDER
+    href = contact if is_url_contact(contact) else f"mailto:{contact}"
+    link = f'<a href="{html.escape(href, quote=True)}"><span class="mono">{html.escape(contact)}</span></a>'
+    page = PRIVACY_TEMPLATE.read_text(encoding="utf-8")
+    page = page.replace("{{CONTACT_NOTICE}}", CONTACT_NOT_CONFIGURED if placeholder else "")
+    return page.replace("{{CONTACT_LINK}}", link)
 
 
 class BodyError(Exception):
@@ -159,6 +188,10 @@ class ScanSlots:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    settings.check()  # raises ConfigError before anything is opened or started
+    privacy_page = render_privacy_page(settings)
+    if is_placeholder_contact(settings.privacy_contact):
+        log.info("BTF_PRIVACY_CONTACT is not set: the privacy notice shows a 'contact not configured' notice.")
     scan.configure_isolation(settings.scan_concurrency)
     store = PetitionStore(settings.db_path)
     # Petition rate limits: stored signatures count against BTF_SIGN_RATE, so a typo or a duplicate does
@@ -367,8 +400,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             tmp_path.unlink(missing_ok=True)
 
+    @app.api_route("/privacy.html", methods=["GET", "HEAD"], response_class=HTMLResponse)
+    async def privacy() -> HTMLResponse:
+        return HTMLResponse(privacy_page)
+
     app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="static")
     return app
 
 
-app = create_app()
+def _create_app_or_exit() -> FastAPI:
+    try:
+        return create_app()
+    except ConfigError as exc:
+        # Printed by logging's last-resort handler even before the server configures logging.
+        log.critical("Refusing to start: %s", exc)
+        raise SystemExit(1) from None
+
+
+app = _create_app_or_exit()

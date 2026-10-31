@@ -1,11 +1,60 @@
 import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 log = logging.getLogger("banthefake")
 
 MIN_ADMIN_TOKEN_LEN = 24
+
+ENVIRONMENTS = ("development", "production")
+PRIVACY_CONTACT_PLACEHOLDER = "privacy@YOUR-DOMAIN.example"
+# Deliberately conservative: no quotes, angle brackets, spaces or control characters can get through, so the
+# value is safe in an href even before it is HTML-escaped (which it is anyway).
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})+")
+_URL_CHARS = r"[A-Za-z0-9._~!$&'()*+,;=:@%/?-]"
+_HTTPS_URL_RE = re.compile(
+    r"https://[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})+(?::[0-9]{1,5})?"
+    rf"(?:/{_URL_CHARS}*)?(?:\?{_URL_CHARS}*)?(?:#{_URL_CHARS}*)?"
+)
+# RFC 2606 / RFC 6761 names that can never be a real, monitored contact.
+_RESERVED_DOMAIN_RE = re.compile(r"(?:^|\.)(?:example(?:\.(?:com|org|net))?|invalid|test|localhost)$", re.I)
+
+
+class ConfigError(Exception):
+    """A setting is invalid: the app must not start."""
+
+
+def validate_privacy_contact(raw: str) -> str:
+    """Return the trimmed contact (an email address or an https:// URL), or raise ConfigError."""
+    value = raw.strip()
+    if len(value) > 254 or not (_EMAIL_RE.fullmatch(value) or _HTTPS_URL_RE.fullmatch(value)):
+        raise ConfigError(
+            "BTF_PRIVACY_CONTACT must be an email address (privacy@your-domain.org) or an https:// URL, "
+            "without spaces, quotes or angle brackets."
+        )
+    return value
+
+
+def is_url_contact(contact: str) -> bool:
+    return contact.startswith("https://")
+
+
+def _contact_domain(contact: str) -> str:
+    if is_url_contact(contact):
+        host = contact[len("https://"):]
+        for sep in "/?#":
+            host = host.split(sep, 1)[0]
+        return host.rsplit(":", 1)[0]
+    return contact.rsplit("@", 1)[1]
+
+
+def is_placeholder_contact(contact: str | None) -> bool:
+    """True when no real contact is configured: unset, the shipped placeholder, or a reserved example domain."""
+    if not contact:
+        return True
+    return bool(_RESERVED_DOMAIN_RE.search(_contact_domain(contact).rstrip(".")))
 
 
 def _admin_token() -> str | None:
@@ -53,11 +102,29 @@ class Settings:
     client_ip_header: str | None = None  # operator-trusted header containing one IP address
     hsts: bool = False
     model: str = "auto"
+    env: str = "development"  # BTF_ENV; "production" refuses to start without a real privacy contact
+    privacy_contact: str | None = None  # BTF_PRIVACY_CONTACT; validated by check()
     static_dir: Path = Path(__file__).resolve().parent.parent / "static"
 
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
+
+    @property
+    def production(self) -> bool:
+        return self.env == "production"
+
+    def check(self) -> None:
+        """Raise ConfigError for settings the app must not start with."""
+        if self.env not in ENVIRONMENTS:
+            raise ConfigError(f"BTF_ENV must be one of: {', '.join(ENVIRONMENTS)} (got {self.env!r}).")
+        if self.privacy_contact is not None:
+            validate_privacy_contact(self.privacy_contact)
+        if self.production and is_placeholder_contact(self.privacy_contact):
+            raise ConfigError(
+                "BTF_ENV=production but BTF_PRIVACY_CONTACT is unset or a placeholder. Set it to a real, "
+                "monitored email address or https:// URL for privacy questions and deletion requests."
+            )
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -76,4 +143,6 @@ class Settings:
             client_ip_header=(os.environ.get("BTF_CLIENT_IP_HEADER") or "").strip() or None,
             hsts=_enabled("BTF_HSTS"),
             model=(os.environ.get("BTF_MODEL") or cls.model).strip().lower(),
+            env=(os.environ.get("BTF_ENV") or cls.env).strip().lower(),
+            privacy_contact=(os.environ.get("BTF_PRIVACY_CONTACT") or "").strip() or None,
         )

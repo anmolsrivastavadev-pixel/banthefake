@@ -277,7 +277,7 @@ def test_normal_png_text_still_read_after_chunk_changes(tmp_path):
 
 # --- 3. Rate-limiter retention -----------------------------------------------------------------------
 
-SWEEP_INTERVAL = 60.0  # the retention bound promised by static/privacy.html: longest window + 60 s
+SWEEP_INTERVAL = 60.0  # the retention bound promised by app/templates/privacy.html: longest window + 60 s
 
 
 class FakeClock:

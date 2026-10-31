@@ -1,0 +1,185 @@
+#cloud-config
+# One-step provisioning of a BanTheFake server: Ubuntu 24.04 LTS on Hetzner Cloud (or any cloud-init host).
+#
+# Paste this file into "Cloud config" (user data) when creating the server, after editing the two
+# REPLACE-ME values below: your SSH public key and the tag or commit to check out. Then:
+#   ssh deploy@SERVER_IP
+#   cd /opt/banthefake/deploy/hetzner && nano .env        # BTF_DOMAIN, ACME_EMAIL, BTF_ADMIN_TOKEN, BTF_PRIVACY_CONTACT
+#   ./deploy.sh v1.0.0                                     # or: ./deploy.sh main
+# Progress and errors of the first boot: /var/log/cloud-init-output.log and /var/log/btf-provision.log.
+# See docs/DEPLOY.md, "Fastest path".
+#
+# What it does:
+#   - user `deploy` (SSH key only, passwordless sudo, member of `docker`); root login and password
+#     login over SSH are disabled
+#   - unattended security upgrades, 2 GB swap
+#   - Docker Engine + compose plugin from Docker's official apt repository, following
+#     https://docs.docker.com/engine/install/ubuntu/ ("Install using the apt repository", read 2026-10-31)
+#   - ufw: allow 22/tcp, 80/tcp, 443/tcp and 443/udp (HTTP/3) only. Docker-published ports bypass ufw
+#     (see the Docker page above), which is why docker-compose.yml publishes the app on 127.0.0.1 only.
+#   - clones https://github.com/anmolsrivastavadev-pixel/banthefake to /opt/banthefake at BTF_REF
+#   - creates deploy/hetzner/.env from .env.example (mode 600) if it does not exist
+#   - a systemd timer running deploy/hetzner/backup-db.sh daily at 03:17 UTC (set AGE_RECIPIENT in
+#     /etc/banthefake/backup.env to encrypt backups)
+#
+# Note: membership of the `docker` group is equivalent to root on this host. Keep the deploy key safe.
+
+users:
+  - name: deploy
+    gecos: BanTheFake deploy user
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      # REPLACE-ME: your public key, e.g. the contents of ~/.ssh/id_ed25519.pub
+      - ssh-ed25519 AAAAREPLACE-WITH-YOUR-PUBLIC-KEY you@example.org
+
+disable_root: true
+ssh_pwauth: false
+
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - ufw
+  - unattended-upgrades
+  - age
+
+write_files:
+  # REPLACE-ME: the release tag or full commit SHA to check out first (deploy.sh switches refs later).
+  - path: /etc/banthefake/provision.env
+    permissions: "0644"
+    content: |
+      BTF_REPO=https://github.com/anmolsrivastavadev-pixel/banthefake.git
+      BTF_REF=REPLACE-WITH-TAG-OR-COMMIT
+      BTF_DIR=/opt/banthefake
+
+  # Optional: AGE_RECIPIENT=age1... to encrypt backups (keep the private key off the server); KEEP=14.
+  - path: /etc/banthefake/backup.env
+    permissions: "0600"
+    content: |
+      # AGE_RECIPIENT=age1...
+      # KEEP=14
+
+  # sshd uses the first value it reads; this file sorts before cloud-init's 50-cloud-init.conf.
+  - path: /etc/ssh/sshd_config.d/10-banthefake.conf
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+
+  - path: /etc/systemd/system/btf-backup.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=BanTheFake petition database backup
+      Requires=docker.service
+      After=docker.service
+
+      [Service]
+      Type=oneshot
+      EnvironmentFile=-/etc/banthefake/backup.env
+      ExecStart=/opt/banthefake/deploy/hetzner/backup-db.sh /var/backups/banthefake
+
+  - path: /etc/systemd/system/btf-backup.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Daily BanTheFake petition database backup
+
+      [Timer]
+      OnCalendar=*-*-* 03:17:00 UTC
+      RandomizedDelaySec=10m
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
+  - path: /usr/local/sbin/btf-provision.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # First-boot provisioning for BanTheFake; run once by cloud-init (runcmd). Safe to re-run.
+      set -euo pipefail
+      exec > >(tee -a /var/log/btf-provision.log) 2>&1
+      # shellcheck source=/dev/null
+      . /etc/banthefake/provision.env
+      export DEBIAN_FRONTEND=noninteractive
+
+      # Docker Engine from Docker's official apt repository (docs.docker.com/engine/install/ubuntu/).
+      # Remove the unofficial distro packages the Docker docs list as conflicting (none on a fresh image).
+      for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+          if dpkg -s "$pkg" >/dev/null 2>&1; then apt-get -y remove "$pkg"; fi
+      done
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      # shellcheck source=/dev/null
+      codename=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+      printf '%s\n' \
+          "Types: deb" \
+          "URIs: https://download.docker.com/linux/ubuntu" \
+          "Suites: $codename" \
+          "Components: stable" \
+          "Architectures: $(dpkg --print-architecture)" \
+          "Signed-By: /etc/apt/keyrings/docker.asc" \
+          > /etc/apt/sources.list.d/docker.sources
+      apt-get update
+      apt-get -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      systemctl enable --now docker
+      usermod -aG docker deploy
+
+      # Firewall: SSH, HTTP, HTTPS (TCP and UDP for HTTP/3). Everything else inbound is denied.
+      ufw default deny incoming
+      ufw default allow outgoing
+      ufw allow 22/tcp
+      ufw allow 80/tcp
+      ufw allow 443/tcp
+      ufw allow 443/udp
+      ufw --force enable
+
+      # 2 GB swap as a safety net for memory peaks.
+      if [ ! -f /swapfile ]; then
+          fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+          echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      fi
+
+      systemctl enable --now unattended-upgrades
+
+      # The code, owned by the deploy user, at the pinned ref.
+      if [ ! -d "$BTF_DIR/.git" ]; then
+          install -d -o deploy -g deploy "$BTF_DIR"
+          sudo -u deploy git clone "$BTF_REPO" "$BTF_DIR"
+      fi
+      if [ "$BTF_REF" = "REPLACE-WITH-TAG-OR-COMMIT" ]; then
+          echo "WARNING: BTF_REF was not set in cloud-init; staying on the default branch. Pin a release with ./deploy.sh <tag>."
+      else
+          sudo -u deploy git -C "$BTF_DIR" checkout --quiet --detach "$BTF_REF"
+      fi
+      envfile="$BTF_DIR/deploy/hetzner/.env"
+      if [ ! -f "$envfile" ]; then
+          install -m 600 -o deploy -g deploy "$BTF_DIR/deploy/hetzner/.env.example" "$envfile"
+      fi
+
+      install -d -m 700 /var/backups/banthefake
+      systemctl daemon-reload
+      systemctl enable btf-backup.timer
+      systemctl start btf-backup.timer
+      systemctl restart ssh
+      echo "BanTheFake provisioning finished. Next: ssh deploy@<this server>, edit $envfile, run ./deploy.sh <ref>."
+
+runcmd:
+  - [bash, /usr/local/sbin/btf-provision.sh]
+
+final_message: "BanTheFake host ready after $UPTIME s. See /var/log/btf-provision.log."

@@ -3,7 +3,7 @@
 A self-hostable campaign site against harmful deepfakes, with working tools:
 
 - **Campaign site**: a static page (`static/index.html`, `static/app.js`, `static/styles.css`) plus a privacy
-  notice (`static/privacy.html`), with no build step.
+  notice (`/privacy.html`, rendered from `app/templates/privacy.html` with the configured contact), with no build step.
 - **Media scanner**: upload an image or video. The server checks it for AI-generator markers, IPTC "digital
   source type", EXIF/XMP camera and editing-software metadata, and C2PA Content Credentials, and runs optional
   ML detectors (two models that must agree). The browser also shows a client-side ELA (error level analysis) heatmap.
@@ -164,6 +164,8 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_SIGN_ATTEMPT_RATE` | `30` | All petition sign attempts, valid or not, per **hour** per client IP. Above this you get 429. |
 | `BTF_PETITION_GOAL` | `10000` | The `goal` returned by `/api/petition/count`. |
 | `BTF_ADMIN_TOKEN` | unset | Bearer token for export and erase. It must be at least 24 characters; a shorter or unset token disables the admin endpoints, which then return 404. |
+| `BTF_PRIVACY_CONTACT` | unset | Contact shown on `/privacy.html` for privacy questions and deletion requests: an email address (linked as `mailto:`) or an `https://` URL. Validated at startup: anything else (spaces, quotes, angle brackets, other schemes) stops the app with an error, in every environment. It is substituted into the page server-side and HTML-escaped. If unset outside production, the page shows the placeholder `privacy@YOUR-DOMAIN.example` and a visible "Contact not configured" notice. |
+| `BTF_ENV` | `development` | `production` or `development`. In `production` the app refuses to start (logs `Refusing to start: ...` and exits with status 1) while `BTF_PRIVACY_CONTACT` is unset or a placeholder (`YOUR-DOMAIN.example`, or an `example.com/.org/.net`, `.example`, `.test`, `.invalid` or `localhost` domain). Any other value is a startup error. The shipped `.env.example` and `fly.toml` set `production`. |
 | `BTF_ADMIN_FAIL_RATE` | `10` | Failed admin authentications allowed per **hour** per client IP. Once the budget is full, all admin requests from that IP return 429 until the window passes, including requests with the correct token. Successful authentication does not use the budget. |
 | `BTF_CLIENT_IP_HEADER` | unset | Opt-in name of an operator-trusted header containing exactly one IPv4 or IPv6 client address (for example, `Fly-Client-IP`). The value is used by scan, petition and failed-admin-authentication limits only when this setting is present. Invalid or missing values fall back to the socket peer. Only use a header the edge overwrites. |
 | `BTF_HSTS` | unset | `on`, `1`, `true` or `yes` adds `Strict-Transport-Security: max-age=31536000` to every response. Enable it only when HTTPS is enforced for the hostname and the TLS proxy is not already adding HSTS. |
@@ -322,10 +324,11 @@ curl -fsS -X DELETE -H "Authorization: Bearer $BTF_ADMIN_TOKEN" \
   supplied token.
 - **Third parties**: the page loads Google Fonts (allowed by the CSP). Self-host the fonts if you want no
   third-party requests.
-- **Privacy notice**: `static/privacy.html` describes the behaviour above to visitors and is linked from the
-  petition consent text and the footer. **Before launch, replace the placeholder address
-  `privacy@YOUR-DOMAIN.example`** (it appears twice in that file) with a real, monitored inbox, and review the
-  page against your own hosting setup (proxy or host logs) and any legal advice you have. Deletion requests
+- **Privacy notice**: `/privacy.html` describes the behaviour above to visitors and is linked from the
+  petition consent text and the footer. The page is rendered from `app/templates/privacy.html` with the
+  operator's contact substituted. **Before launch, set `BTF_PRIVACY_CONTACT`** to a real, monitored inbox (or
+  an `https://` contact page) and `BTF_ENV=production`, which refuses to start without one. Review the page
+  against your own hosting setup (proxy or host logs) and any legal advice you have. Deletion requests
   sent there are handled with the admin `DELETE /api/petition` call shown above. If you self-host the fonts,
   update the "Third parties" section of the page.
 
@@ -341,6 +344,7 @@ docker build -t banthefake .
 docker run -d --name banthefake -p 8000:8000 \
   -v banthefake-data:/data \
   -e BTF_ADMIN_TOKEN='replace-with-at-least-24-random-characters' \
+  -e BTF_PRIVACY_CONTACT='privacy@your-domain.org' -e BTF_ENV=production \
   -e FORWARDED_ALLOW_IPS='10.0.0.2' \
   banthefake
 curl http://127.0.0.1:8000/api/health

@@ -2,6 +2,7 @@
 
 This guide covers a production deployment of the Docker image described in [README.md](../README.md#deployment).
 It recommends two ways to host it, gives step-by-step instructions for both, and ends with a pre-launch checklist.
+In a hurry? The [fastest path](#fastest-path-hetzner-with-cloud-init-and-deploysh) is four steps on Hetzner.
 
 Ready-to-use config in this repository:
 
@@ -11,6 +12,8 @@ Ready-to-use config in this repository:
 | [`deploy/hetzner/Caddyfile`](../deploy/hetzner/Caddyfile) | Option A: TLS, upload size limit, timeouts, retry during restarts, no access log |
 | [`deploy/hetzner/.env.example`](../deploy/hetzner/.env.example) | Option A: domain, ACME email, admin token and app settings |
 | [`deploy/hetzner/backup-db.sh`](../deploy/hetzner/backup-db.sh) | Option A: consistent, compressed and optionally encrypted SQLite backups |
+| [`deploy/hetzner/cloud-init.yaml`](../deploy/hetzner/cloud-init.yaml) | Option A: one-step server provisioning (deploy user, SSH hardening, Docker, ufw, auto-updates, backup timer, code checkout) |
+| [`deploy/hetzner/deploy.sh`](../deploy/hetzner/deploy.sh) | Option A: `./deploy.sh <git-ref>`: checks `.env`, deploys a tag/commit, waits for health, rolls back on failure |
 | [`fly.toml`](../fly.toml) | Option B: Fly.io Machine size, volume, health check, always-on |
 
 ## What the app needs from a host
@@ -78,7 +81,7 @@ Notes:
 - **Home server**: this is the cheapest option if the hardware already exists. Downsides: residential uptime
   and power, and exposing your home IP (or terminating TLS at a tunnel provider, which then sees every
   uploaded file in clear text). Uploads are personal data under the privacy notice, so use this option only
-  with a provider you would also name in `static/privacy.html`.
+  with a provider you would also name in `app/templates/privacy.html`.
 
 ### Recommendation
 
@@ -101,6 +104,8 @@ deployment sets or must think about:
 | Variable | Option A (compose) | Option B (Fly) | Notes |
 |---|---|---|---|
 | `BTF_ADMIN_TOKEN` | `.env` | `fly secrets set` | **Required** for export and erase. At least 24 characters, or the admin endpoints stay disabled (404) and an error is logged. |
+| `BTF_PRIVACY_CONTACT` | `.env` | `fly secrets set` or `[env]` | **Required** in production. Monitored email address or `https://` URL shown on `/privacy.html` for privacy and deletion requests. Validated at startup; HTML-escaped into the page. |
+| `BTF_ENV` | `production` (`.env`) | `production` (`[env]`) | With `production`, the app refuses to start (exit 1, `Refusing to start: ...` in the log) while `BTF_PRIVACY_CONTACT` is unset or a placeholder. Default `development` shows a "Contact not configured" notice instead. |
 | `BTF_ADMIN_FAIL_RATE` | `10` | `10` | Failed admin authentications allowed per client IP per hour. Once full, that IP receives 429 on all admin requests until the window passes. |
 | `FORWARDED_ALLOW_IPS` | fixed in compose: `172.31.250.1` | default; unused for client identity | Caddy's fixed proxy address. **Never `*`**: clients could spoof `X-Forwarded-For`. Fly does not depend on Uvicorn's forwarding-header selection. |
 | `BTF_CLIENT_IP_HEADER` | unset | `Fly-Client-IP` | Opt-in name of an edge-controlled header containing exactly one IPv4 or IPv6 address. Invalid or absent values fall back to the socket peer. Do not enable this for a header clients can supply unchanged. |
@@ -118,7 +123,66 @@ deployment sets or must think about:
 
 ---
 
+## Fastest path: Hetzner with cloud-init and `deploy.sh`
+
+This is Option A with the host preparation automated. Read Option A once for how the pieces fit together.
+
+1. **Create the server with the cloud-init file.** Copy
+   [`deploy/hetzner/cloud-init.yaml`](../deploy/hetzner/cloud-init.yaml) and edit the two `REPLACE-ME`
+   values: your SSH public key (for the `deploy` user) and `BTF_REF`, the release tag or commit to check out
+   (for example `v1.0.0`, see [Releases](#releases-manual-tagging)). In the Hetzner Console, create a server
+   as in [A1](#a1-create-the-server) (CPX22, Ubuntu 24.04, IPv4 + IPv6, backups on, the Cloud Firewall) and
+   paste the file into **Cloud config**. Point DNS at it ([A2](#a2-dns)).
+
+   On first boot it creates the `deploy` user (key-only, passwordless sudo, in the `docker` group), disables
+   root and password SSH logins, enables unattended security upgrades, adds 2 GB of swap, installs Docker
+   Engine and the compose plugin from Docker's official apt repository (per
+   <https://docs.docker.com/engine/install/ubuntu/>), enables `ufw` with only 22/tcp, 80/tcp, 443/tcp and
+   443/udp open, clones the repository to `/opt/banthefake` at `BTF_REF`, creates `deploy/hetzner/.env` from
+   `.env.example` (mode 600), and installs the `btf-backup.timer` systemd timer (daily backup with
+   `backup-db.sh` into `/var/backups/banthefake`). This takes a few minutes; progress is in
+   `/var/log/cloud-init-output.log` and `/var/log/btf-provision.log`.
+
+2. **SSH in:** `ssh deploy@SERVER_IP`. (`cloud-init status --wait` blocks until provisioning has finished.)
+
+3. **Edit `.env`:**
+
+   ```bash
+   cd /opt/banthefake/deploy/hetzner
+   python3 -c 'import secrets; print(secrets.token_urlsafe(32))'   # paste into BTF_ADMIN_TOKEN
+   nano .env   # BTF_DOMAIN, ACME_EMAIL, BTF_ADMIN_TOKEN, BTF_PRIVACY_CONTACT (BTF_ENV=production stays)
+   ```
+
+   To encrypt backups, put `AGE_RECIPIENT=age1...` in `/etc/banthefake/backup.env` (`sudo nano`), and set up
+   an off-site copy as in [A7](#a7-backups).
+
+4. **Deploy:** `./deploy.sh main` (or a tag, `./deploy.sh v1.0.0`).
+
+`deploy.sh <git-ref>` is idempotent and is also how you update later. It:
+
+- refuses to run unless `.env` has `BTF_DOMAIN`, `ACME_EMAIL` (no `example.*` placeholders),
+  `BTF_ADMIN_TOKEN` (at least 24 characters) and a non-placeholder `BTF_PRIVACY_CONTACT`, and refuses if
+  tracked files in the checkout were edited;
+- fetches, checks out the ref detached (a branch name means the latest fetched commit of that branch), tags
+  the running image `banthefake:rollback`, builds the app image, pulls Caddy and runs `docker compose up -d`;
+- waits up to `HEALTH_TIMEOUT` seconds (default 600) for `http://127.0.0.1:8000/api/health` to report
+  `"model":"loaded"` (or `"off"` if `.env` sets `BTF_MODEL=off`), then prints the public URL;
+- if the build, start or health check fails, checks out the previous commit, restores the previous image,
+  restarts it, waits for health again and exits non-zero.
+
+The first build takes roughly 10 to 20 minutes. Afterwards, do [A6](#a6-verify-client-ip-handling) and the
+[pre-launch checklist](#pre-launch-checklist). Prefer deploying tags or commits that passed CI over `main`.
+
+Not verified here: the cloud-init file was checked against cloud-init's published JSON schema and its
+provisioning script with `shellcheck`, but it has not been booted on a real server from this repository.
+Check `/var/log/btf-provision.log` on the first run.
+
+---
+
 ## Option A: Hetzner Cloud VPS with Docker Compose and Caddy
+
+The [fastest path](#fastest-path-hetzner-with-cloud-init-and-deploysh) automates A3 to A5 and A8. The manual
+steps below describe the same setup.
 
 ### A1. Create the server
 
@@ -160,18 +224,19 @@ Optionally, create a non-root deploy user in the `docker` group and disable root
 ### A4. Get the code and configure it
 
 ```bash
-git clone https://github.com/YOUR-ORG/banthefake.git /opt/banthefake
+git clone https://github.com/anmolsrivastavadev-pixel/banthefake.git /opt/banthefake
 cd /opt/banthefake
 git checkout <commit-or-tag-that-passed-CI>
 
 cd deploy/hetzner
 cp .env.example .env && chmod 600 .env
 python3 -c 'import secrets; print(secrets.token_urlsafe(32))'   # paste into BTF_ADMIN_TOKEN
-nano .env   # set BTF_DOMAIN, ACME_EMAIL, BTF_ADMIN_TOKEN
+nano .env   # set BTF_DOMAIN, ACME_EMAIL, BTF_ADMIN_TOKEN, BTF_PRIVACY_CONTACT
 ```
 
-Before you build, do the content items in the [pre-launch checklist](#pre-launch-checklist), at least the
-privacy contact address, in the commit you deploy.
+Before you build, do the content items in the [pre-launch checklist](#pre-launch-checklist). With
+`BTF_ENV=production` (as in `.env.example`) the app refuses to start until `BTF_PRIVACY_CONTACT` is a real
+contact; `docker compose logs app` then shows `Refusing to start: ...`.
 
 ### A5. Build and start
 
@@ -353,6 +418,7 @@ ownership is stored on the volume and survives deploys.
 ```bash
 fly secrets set --stage BTF_ADMIN_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" \
   --app banthefake-CHANGE-ME
+fly secrets set --stage BTF_PRIVACY_CONTACT='privacy@your-domain.org' --app banthefake-CHANGE-ME
 # store the token in your password manager first, or set it from a value you already saved
 fly deploy --ha=false
 fly scale count 1 --app banthefake-CHANGE-ME     # must stay 1: in-memory rate limiter + one volume
@@ -434,7 +500,7 @@ which is wrong for this image.
 
 - The image runs uvicorn with `--no-access-log`, so the app never logs client IPs. Uploads are never logged.
 - Caddy writes no access log unless you add a `log` directive. Do not add one without updating
-  `static/privacy.html`.
+  `app/templates/privacy.html`.
 - Docker logs are rotated (3 × 10 MB per container). On Fly, platform logs (`fly logs`) are kept by Fly. The
   app writes no visitor data to them, but name your hosting provider in the privacy notice in either case.
 - The host provider and any CDN or tunnel you put in front terminate TLS. Under the privacy notice they are
@@ -466,9 +532,11 @@ otherwise on a regular schedule. Check the new token with an export
 
 ## Pre-launch checklist
 
-- [ ] **Privacy contact:** `privacy@YOUR-DOMAIN.example` is replaced in `static/privacy.html` (both places)
-      with a real, monitored inbox, and the page names your host (Hetzner or Fly.io), your backup location and
-      retention, and any CDN.
+- [ ] **Privacy contact:** `BTF_PRIVACY_CONTACT` is a real, monitored inbox (or `https://` contact page) and
+      `BTF_ENV=production` is set, so the app refuses to start without it. `https://YOUR-DOMAIN/privacy.html`
+      shows your contact twice and no "Contact not configured" notice. The page
+      (`app/templates/privacy.html`) names your host (Hetzner or Fly.io), your backup location and retention,
+      and any CDN.
 - [ ] **Real domain:** DNS A/AAAA (or the Fly certificate records) point at the deployment. HTTPS works, with
       HTTP redirecting to HTTPS. `BTF_DOMAIN` (Option A) or `fly certs` (Option B) uses the real name, and no
       `example.org` or `CHANGE-ME` values are left.
@@ -493,7 +561,29 @@ otherwise on a regular schedule. Check the new token with an export
 - [ ] **Firewall** (Option A): only 22, 80 and 443 (TCP and UDP) are open, and port 8000 is not reachable from
       outside (`curl http://SERVER_IP:8000` from your machine must fail).
 
+## Releases (manual tagging)
+
+There is no release automation: a release is an annotated git tag on a commit whose CI run is green.
+To cut `v1.0.0` (not created yet):
+
+```bash
+git checkout main && git pull --ff-only
+git status                                  # clean
+gh run list --branch main --limit 5         # test, test-ml and docker all green for this exact commit
+git log -1 --format='%H %s'                 # the commit you are tagging
+git tag -a v1.0.0 -m "BanTheFake v1.0.0"    # add -s to sign it if you have a signing key set up
+git push origin v1.0.0
+```
+
+Then deploy it with `./deploy.sh v1.0.0` (or set `BTF_REF=v1.0.0` in `cloud-init.yaml` for a new server).
+Tags are immutable by convention: never move or re-push a published tag; fix forward with `v1.0.1`. Use
+`vMAJOR.MINOR.PATCH`. Optionally write release notes on GitHub (`gh release create v1.0.0 --notes ...`).
+If a release is bad, roll back by deploying the previous tag: `./deploy.sh <previous-tag>`.
+
 ## Sources (read 2026-10-31)
+
+- Docker Engine on Ubuntu (official apt repository, `docker.sources`, conflicting packages, ufw caveat):
+  <https://docs.docker.com/engine/install/ubuntu/>
 
 - Hetzner Cloud overview, plan families and starting prices: <https://www.hetzner.com/cloud/>
 - Hetzner Regular Performance (CPX) plans, traffic, IPv4 included: <https://www.hetzner.com/cloud/regular-performance/>
