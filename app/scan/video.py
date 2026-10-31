@@ -93,10 +93,13 @@ def probe(path: str | Path, sample: int = SAMPLE_FRAMES) -> VideoInfo:
 
 
 def _sample(container, stream, info: VideoInfo, n: int) -> None:
-    """Seek to the keyframe before each target time, then decode forward to the target.
+    """Pick up to `n` frames spread evenly over the whole video.
 
-    Decoding forward is capped (frames per seek and a total time budget) so long GOPs or huge
-    files cannot stall the server; when the cap is hit the last decoded frame is used.
+    For each target time, seek to the keyframe before it and decode forward to the target. If that
+    takes more than `cap` frames, keyframes are too far apart for seeking to help (long GOP, or no
+    seek index): stop seeking and decode the rest of the file in one forward pass, skipping
+    non-reference frames, taking the first frame at or after each remaining target. Everything is
+    bounded by TIME_BUDGET_S; `info.timestamps` records how much of the video was covered.
     """
     stream.thread_type = "AUTO"
     deadline = time.monotonic() + TIME_BUDGET_S
@@ -105,18 +108,27 @@ def _sample(container, stream, info: VideoInfo, n: int) -> None:
     cap = MAX_DECODE_PER_SEEK // 4 if big else MAX_DECODE_PER_SEEK
     targets = [dur * (i + 0.5) / n for i in range(n)] if dur > 0 else [0.0]
     seen: set[int] = set()
+    forward = None  # the single forward-decoding iterator, once seeking has been given up
     for t in targets:
         if time.monotonic() > deadline:
             break
-        offset = int(t / stream.time_base) if stream.time_base else 0
-        if stream.start_time is not None:
-            offset += stream.start_time
-        container.seek(offset, stream=stream, backward=True, any_frame=False)
+        if forward is None:
+            offset = int(t / stream.time_base) if stream.time_base else 0
+            if stream.start_time is not None:
+                offset += stream.start_time
+            container.seek(offset, stream=stream, backward=True, any_frame=False)
+            frames = container.decode(stream)
+        else:
+            frames = forward
         picked = None
-        for i, frame in enumerate(container.decode(stream)):
+        for i, frame in enumerate(frames):
             picked = frame
-            if (frame.time is not None and frame.time >= t - 0.02) or i + 1 >= cap or time.monotonic() > deadline:
+            if (frame.time is not None and frame.time >= t - 0.02) or time.monotonic() > deadline:
                 break
+            if forward is None and i + 1 >= cap:
+                log.info("keyframes too sparse to seek; sampling in one forward pass")
+                forward = frames
+                stream.codec_context.skip_frame = "NONREF"
         if picked is None:
             continue
         key = picked.pts if picked.pts is not None else len(seen)

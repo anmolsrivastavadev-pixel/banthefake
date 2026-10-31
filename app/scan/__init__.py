@@ -42,11 +42,19 @@ class C2PAInfo(TypedDict):
     actions: list[str]
 
 
+class Coverage(TypedDict):
+    first_s: float  # timestamp of the first sampled frame
+    last_s: float  # timestamp of the last sampled frame
+    duration_s: float | None  # video duration, if known
+
+
 class ModelInfo(TypedDict):
     name: str
     ai_probability: float
     frames_checked: int
     frame_probabilities: NotRequired[list[float]]
+    frame_timestamps: NotRequired[list[float]]
+    coverage: NotRequired[Coverage]
 
 
 class FileInfo(TypedDict):
@@ -129,6 +137,8 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
 
     # --- format-specific metadata + pixels for the model ---------------------------------------
     frames = []
+    timestamps: list[float] = []
+    duration: float | None = None
     camera = ""
     camera_details = False
     detector_reason = "the file could not be decoded"  # why the model could not run, if it did not
@@ -174,6 +184,7 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         tool_fields += vid.tool_fields()
         camera = " ".join(x for x in (vid.make, vid.model) if x)
         frames = vid.frames
+        timestamps, duration = vid.timestamps, vid.duration_s
         detector_reason = vid.error or "no video frames could be decoded"
         has_metadata = bool(camera) or any(k.startswith("com.apple") for k in vid.metadata)
 
@@ -193,7 +204,7 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         detail = " with exposure settings" if camera_details else ""
         out.add("camera", f"Camera data found ({camera}){detail}. Real cameras write this, but it can be copied or faked.", 0.4)
 
-    model_info, model_failure = _run_model(out, frames, kind)
+    model_info, model_failure = _run_model(out, frames, kind, timestamps, duration)
     detector_failed = model.enabled() and model_info is None
     if detector_failed:
         # Never skip the model silently: an unanalyzed file must not look like a clean one.
@@ -248,7 +259,9 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
         out.add("c2pa", f"Content credentials list the source type as: {kinds} (not generative AI).", 0.3)
 
 
-def _run_model(out: _Collector, frames: list, kind: str) -> tuple[ModelInfo | None, str | None]:
+def _run_model(
+    out: _Collector, frames: list, kind: str, timestamps: list[float] | None = None, duration: float | None = None
+) -> tuple[ModelInfo | None, str | None]:
     """Run the detector. Returns (info, None), or (None, reason) when it ran but gave no result."""
     if not frames:
         return None, None
@@ -267,12 +280,23 @@ def _run_model(out: _Collector, frames: list, kind: str) -> tuple[ModelInfo | No
     else:
         p = probs[0]
     info: ModelInfo = {"name": model.name(), "ai_probability": round(p, 4), "frames_checked": len(probs)}
+    coverage_note = partial = ""
     if kind == "video":
         info["frame_probabilities"] = [round(x, 4) for x in probs]
+        if timestamps and len(timestamps) == len(probs):
+            first, last = timestamps[0], timestamps[-1]
+            dur = round(duration, 2) if duration else None
+            info["frame_timestamps"] = timestamps
+            info["coverage"] = {"first_s": first, "last_s": last, "duration_s": dur}
+            coverage_note = f", taken from {first:.1f} s to {last:.1f} s" + (f" of {dur:.1f} s" if dur else "")
+            if dur and dur > 2 and last < 0.75 * dur:
+                partial = (f"The detector only reached {last:.1f} s of this {dur:.1f} s video (time limit), "
+                           "so the rest was not checked.")
     pct = _pct(p)
     over = sum(x >= model.LIKELY for x in probs)
     frames_note = (
-        f" (based on the most suspicious half of {len(probs)} sampled frames; {over} of {len(probs)} rated likely AI)"
+        f" (based on the most suspicious half of {len(probs)} sampled frames{coverage_note}; "
+        f"{over} of {len(probs)} rated likely AI)"
         if kind == "video" and len(probs) > 1 else ""
     )
     if p >= model.LIKELY:
@@ -281,6 +305,8 @@ def _run_model(out: _Collector, frames: list, kind: str) -> tuple[ModelInfo | No
         out.add("model", f"Our detector model sees possible signs of AI generation ({pct}%){frames_note}. Not conclusive.", p)
     else:
         out.add("model", f"Our detector model found no strong AI signal ({pct}%){frames_note}. Detectors miss many fakes, so this does not mean it is real.", p)
+    if partial:
+        out.add("info", partial, 0.2)
     return info, None
 
 
