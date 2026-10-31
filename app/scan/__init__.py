@@ -7,10 +7,13 @@ C2PA content credentials -> optional ML detector -> verdict.
 import logging
 import math
 import os
+from dataclasses import asdict
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict
 
-from app.scan import c2pa_check, exif, markers, model, video
+from PIL import Image
+
+from app.scan import c2pa_check, exif, isolate, markers, model, video
 from app.scan.markers import Hit
 
 log = logging.getLogger("banthefake.scan")
@@ -111,6 +114,47 @@ def warmup() -> None:
     model.warmup()
 
 
+def configure_isolation(concurrency: int) -> None:
+    isolate.configure(concurrency)
+
+
+def shutdown() -> None:
+    isolate.shutdown()
+
+
+ScanTimeout = isolate.ScanTimeout
+ScanFailed = isolate.WorkerFailed
+
+# Tests and embedders sometimes replace parser callables with deterministic fakes. Spawned children cannot
+# inherit those process-local replacements, so keep that explicitly instrumented path in-process. Normal
+# application code retains the default isolated path.
+_PARSER_ORIGINALS = {
+    "c2pa_read": c2pa_check.read,
+    "exif_extract": exif.extract,
+    "exif_decode": exif.decode_for_model,
+    "video_probe": video.probe,
+    "marker_read": markers.read_window,
+}
+_PARSER_LIMITS = {
+    "decode_pixels": exif.MAX_DECODE_PIXELS,
+    "image_pixels": exif.MAX_PIXELS,
+    "video_pixels": video.MAX_PIXELS,
+}
+
+
+def _parser_instrumented() -> bool:
+    return (
+        c2pa_check.read is not _PARSER_ORIGINALS["c2pa_read"]
+        or exif.extract is not _PARSER_ORIGINALS["exif_extract"]
+        or exif.decode_for_model is not _PARSER_ORIGINALS["exif_decode"]
+        or video.probe is not _PARSER_ORIGINALS["video_probe"]
+        or markers.read_window is not _PARSER_ORIGINALS["marker_read"]
+        or exif.MAX_DECODE_PIXELS != _PARSER_LIMITS["decode_pixels"]
+        or exif.MAX_PIXELS != _PARSER_LIMITS["image_pixels"]
+        or video.MAX_PIXELS != _PARSER_LIMITS["video_pixels"]
+    )
+
+
 def _sig(kind: SignalKind, text: str, weight: float) -> Signal:
     return {"kind": kind, "text": text, "weight": round(max(0.0, min(1.0, weight)), 3)}
 
@@ -137,16 +181,21 @@ class _Collector:
         return any(s["kind"] == kind for s in self.signals)
 
 
-def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
-    """Scan the media file at `path`. `content_type` is the server-sniffed MIME type."""
-    kind: Literal["image", "video"] = "video" if content_type.startswith("video/") else "image"
-    file_info: FileInfo = {"type": kind, "mime": content_type, "size_bytes": os.path.getsize(path)}
-    out = _Collector()
+def _hit_record(hit: Hit) -> dict:
+    return asdict(hit)
 
+
+def _frame_record(image: Image.Image) -> dict:
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    return {"width": image.width, "height": image.height, "mode": "RGB", "data": image.tobytes()}
+
+
+def _parse_hostile(path: str | Path, content_type: str, want_frames: bool) -> dict:
+    """Interpret uploaded bytes. Called only inside a parser worker when isolation is enabled."""
+    kind: Literal["image", "video"] = "video" if content_type.startswith("video/") else "image"
     raw = markers.read_window(path)
     raw_hits = markers.scan_bytes(raw)
-
-    # --- C2PA ---------------------------------------------------------------------------------
     cred = c2pa_check.read(path, content_type)
     if cred is not None and not cred.readable:
         cred = c2pa_check.C2PAResult(present=True, readable=False) if markers.has_c2pa_hint(raw) else None
@@ -157,25 +206,27 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         tool_fields += [("C2PA softwareAgent", a) for a in cred.software_agents]
     chunk_hits: list[Hit] = []
     low_colour = False
-
-    # --- format-specific metadata + pixels for the model ---------------------------------------
-    frames = []
+    frames: list[Image.Image] = []
     timestamps: list[float] = []
     duration: float | None = None
     camera = ""
     camera_details = False
+    width = height = None
+    video_error = None
+    image_error = False
+    notes: list[str] = []
     detector_reason = "the file could not be decoded"  # why the model could not run, if it did not
     if kind == "image":
         try:
             meta = exif.extract(path)
         except exif.ImageTooLarge as exc:
             raise UnsupportedMedia("Image dimensions are too large to scan.") from exc
-        if meta.error:
-            out.add("info", "The image could not be decoded; only its raw bytes were checked.", 0.1)
-        else:
-            file_info["width"], file_info["height"] = meta.width, meta.height
+        if meta.error and content_type in ("image/heic", "image/heif"):
+            raise UnsupportedMedia("HEIC/HEIF images are not supported on this server.")
+        image_error = bool(meta.error)
+        if not meta.error:
+            width, height = meta.width, meta.height
         tool_fields += meta.tool_fields()
-        # generator settings stored in (possibly compressed) text chunks
         for key, value in meta.text_chunks.items():
             chunk_hits += markers.scan_generator_metadata(
                 value.encode("utf-8", "replace"), meta.text_field(key), key
@@ -189,13 +240,12 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         has_metadata = meta.has_exif or bool(meta.xmp) or bool(meta.text_chunks)
         if meta.error:
             detector_reason = "the image could not be opened"
-        elif model.enabled():
+        elif want_frames:
             try:
                 decoded = exif.decode_for_model(path)
                 frames = [decoded.image]
                 low_colour = decoded.low_colour
-                for note in decoded.notes:
-                    out.add("info", f"Note: {note}.", 0.1)
+                notes = decoded.notes
             except exif.ImageTooLarge as exc:
                 raise UnsupportedMedia("Image dimensions are too large to scan.") from exc
             except exif.DecodeFailed as exc:
@@ -204,16 +254,12 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
                 log.info("image decode for model failed: %s", type(exc).__name__)
                 detector_reason = f"the image could not be decoded ({type(exc).__name__})"
     else:
-        vid = video.probe(path, sample=video.SAMPLE_FRAMES if model.enabled() else 0)
+        vid = video.probe(path, sample=video.SAMPLE_FRAMES if want_frames else 0)
         if vid.audio_only:
             raise UnsupportedMedia("This file has no video track (audio-only files cannot be scanned). "
                                    "Upload an image or a video.")
-        if vid.width and vid.height:
-            file_info["width"], file_info["height"] = vid.width, vid.height
-        if vid.duration_s:
-            file_info["duration_s"] = round(vid.duration_s, 2)
-        if vid.error:
-            out.add("info", f"Video check limited: {vid.error}.", 0.1)
+        width, height = vid.width, vid.height
+        video_error = vid.error
         tool_fields += vid.tool_fields()
         camera = " ".join(x for x in (vid.make, vid.model) if x)
         frames = vid.frames
@@ -222,6 +268,75 @@ def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
         has_metadata = bool(camera) or any(k.startswith("com.apple") for k in vid.metadata)
 
     text_hits = markers.scan_text(tool_fields)
+    return {
+        "version": isolate.PROTOCOL_VERSION,
+        "kind": kind,
+        "raw_hits": [_hit_record(h) for h in raw_hits],
+        "text_hits": [_hit_record(h) for h in text_hits],
+        "chunk_hits": [_hit_record(h) for h in chunk_hits],
+        "cred": asdict(cred) if cred is not None else None,
+        "frames": [_frame_record(frame) for frame in frames],
+        "timestamps": timestamps,
+        "duration": duration,
+        "width": width,
+        "height": height,
+        "camera": camera,
+        "camera_details": camera_details,
+        "has_metadata": has_metadata,
+        "image_error": image_error,
+        "video_error": video_error,
+        "detector_reason": detector_reason,
+        "low_colour": low_colour,
+        "notes": notes,
+    }
+
+
+def _hits(records: list[dict]) -> list[Hit]:
+    return [Hit(**record) for record in records]
+
+
+def _images(records: list[dict]) -> list[Image.Image]:
+    return [Image.frombytes("RGB", (record["width"], record["height"]), record["data"]) for record in records]
+
+
+def scan_file(path: str | Path, filename: str, content_type: str) -> ScanReport:
+    """Scan the media file at `path`. `content_type` is the server-sniffed MIME type."""
+    want_frames = model.enabled()
+    try:
+        parsed = (
+            isolate.parse(path, filename, content_type, want_frames)
+            if isolate.enabled() and not _parser_instrumented()
+            else _parse_hostile(path, content_type, want_frames)
+        )
+    except isolate.WorkerUnsupportedMedia as exc:
+        raise UnsupportedMedia(str(exc)) from exc
+
+    kind = parsed["kind"]
+    file_info: FileInfo = {"type": kind, "mime": content_type, "size_bytes": os.path.getsize(path)}
+    if parsed["width"] and parsed["height"]:
+        file_info["width"], file_info["height"] = parsed["width"], parsed["height"]
+    if kind == "video" and parsed["duration"]:
+        file_info["duration_s"] = round(parsed["duration"], 2)
+    out = _Collector()
+    if parsed["image_error"]:
+        out.add("info", "The image could not be decoded; only its raw bytes were checked.", 0.1)
+    if parsed["video_error"]:
+        out.add("info", f"Video check limited: {parsed['video_error']}.", 0.1)
+    for note in parsed["notes"]:
+        out.add("info", f"Note: {note}.", 0.1)
+
+    cred = c2pa_check.C2PAResult(**parsed["cred"]) if parsed["cred"] is not None else None
+    raw_hits = _hits(parsed["raw_hits"])
+    text_hits = _hits(parsed["text_hits"])
+    chunk_hits = _hits(parsed["chunk_hits"])
+    frames = _images(parsed["frames"])
+    timestamps = parsed["timestamps"]
+    duration = parsed["duration"]
+    camera = parsed["camera"]
+    camera_details = parsed["camera_details"]
+    has_metadata = parsed["has_metadata"]
+    detector_reason = parsed["detector_reason"]
+    low_colour = parsed["low_colour"]
 
     # --- assemble signals in priority order ----------------------------------------------------
     if cred is not None:

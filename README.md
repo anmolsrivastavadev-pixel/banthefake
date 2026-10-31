@@ -150,6 +150,12 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_SCAN_RATE` | `10` | Scans per **minute** per client IP. Above this you get 429. |
 | `BTF_SCAN_CONCURRENCY` | `2` | Scans that may decode media and run the model at the same time (bounds memory). Further scans wait for a slot. |
 | `BTF_SCAN_WAIT_S` | `30` | Seconds a scan may wait for a slot before the server answers 503 `{"error": "busy"}` (with `Retry-After`). |
+| `BTF_SCAN_ISOLATION` | `on` | Runs every untrusted-media parser and decoder in spawned worker processes. `off`, `0`, `false` or `no` uses the in-process debugging path. Keep this on in production. |
+| `BTF_SCAN_TIMEOUT_S` | `30` | Hard wall-clock limit for one isolated parse/decode job. The worker is killed and replaced, and the API returns 504 `{"error": "scan_timeout"}`. |
+| `BTF_SCAN_WORKER_JOBS` | `50` | Successful jobs handled by a parser worker before it is recycled. The parser pool size equals `BTF_SCAN_CONCURRENCY`. |
+| `BTF_SCAN_MAX_RSS_MB` | `1024` | Address-space/RSS budget per parser worker. Linux enforces `RLIMIT_AS`; all platforms also use a worker RSS watchdog and deterministic pixel/IPC limits. |
+| `BTF_SCAN_MAX_NOFILE` | `64` | File-descriptor limit per parser worker (minimum 16). Workers also have `RLIMIT_FSIZE=0` and a per-job CPU limit. |
+| `BTF_SCAN_IPC_MB` | `32` | Maximum parser response size. It covers bounded metadata and raw, downsampled RGB frames returned to the parent for model inference. |
 | `BTF_SIGN_RATE` | `5` | Successful petition signatures per **hour** per client IP (honeypot hits count too). Rejected attempts (validation errors, duplicates) do not use this quota. Above it you get 429. |
 | `BTF_SIGN_ATTEMPT_RATE` | `30` | All petition sign attempts, valid or not, per **hour** per client IP. Above this you get 429. |
 | `BTF_PETITION_GOAL` | `10000` | The `goal` returned by `/api/petition/count`. |
@@ -178,7 +184,7 @@ Every response, error responses included, carries a strict CSP, `X-Content-Type-
 | Method and path | Body | Success | Errors |
 |---|---|---|---|
 | `GET /api/health` | none | 200 `{"ok": true, "model": "loaded"\|"degraded"\|"loading"\|"off"\|"unavailable", "c2pa": bool}` (`degraded`: one of the two detector models failed to load) | none |
-| `POST /api/scan` | `multipart/form-data`, field `file` | 200 scan report (below) | 400 (not multipart, no `file` field, empty, malformed or unterminated upload, client disconnected), 413 too large, 415 unsupported type (also audio-only MP4), 429 rate limited, 503 `busy` (no scan slot within `BTF_SCAN_WAIT_S`), 500 scan failed |
+| `POST /api/scan` | `multipart/form-data`, field `file` | 200 scan report (below) | 400 (not multipart, no `file` field, empty, malformed or unterminated upload, client disconnected), 413 too large, 415 unsupported type (also audio-only MP4), 429 rate limited, 503 `busy` (no scan slot within `BTF_SCAN_WAIT_S`), 504 `scan_timeout`, 500 `scan_failed` |
 | `POST /api/petition` | `application/json`, at most 16 KB: `{"name", "email", "location"?, "consent": true, "website"?}` | 201 `{"ok": true}` | 400 body is not a JSON object, 409 `already_signed`, 413 body over 16 KB, 415 not `application/json`, 422 validation, 429 rate limited |
 | `GET /api/petition/count` | none | 200 `{"count": int, "goal": int}` | none |
 | `GET /api/petition/export.csv` | admin bearer token | 200 `text/csv` (`name,email,location,created_at`) | 401 wrong or missing token, 404 admin disabled |
@@ -188,6 +194,10 @@ Notes:
 
 - **Scan input** is identified by magic bytes, and the client content type is ignored. The accepted types
   are JPEG, PNG, WEBP, GIF, HEIC/HEIF (only if this server's Pillow can open them) and MP4, MOV and WEBM.
+- **Media parsing is process-isolated.** Raw marker scans, Pillow/EXIF/XMP/PNG parsing, PyAV opening, seeking
+  and decoding, and C2PA validation run in spawned workers. The parent kills and replaces a worker that hangs,
+  crashes or exceeds its limits. Workers return bounded RGB frame bytes; the detector models remain loaded once
+  in the parent. See [`docs/ISOLATION-DESIGN.md`](docs/ISOLATION-DESIGN.md) for the boundary and IPC contract.
 - **Petition validation**: name must be 1 to 100 characters, email must be valid and at most 254 characters,
   location must be at most 100 characters, and `consent` must be `true`. Emails are trimmed and lowercased, and
   each email can sign once. Emails must be ASCII, with no leading, trailing or consecutive dots in the local
@@ -289,8 +299,8 @@ curl -fsS -X DELETE -H "Authorization: Bearer $BTF_ADMIN_TOKEN" \
 ## Privacy
 
 - **Uploads**: each upload is streamed to a temp file, scanned, and deleted in a `finally` block, so it is
-  removed even when the scan fails. Uploads are never stored or logged. The ML model runs locally, so no
-  third-party API sees them.
+  removed even when the scan fails, its parser crashes, or its deadline expires. Uploads are never stored or
+  logged. Parser workers only read the temporary file. The ML model runs locally, so no third-party API sees it.
 - **Petition**: the server stores name, email, optional location and a UTC timestamp. It does **not** store IP
   addresses. IPs are only held in memory by the rate limiter, for its sliding window.
 - **Access logs**: Uvicorn's access log prints client IPs. The Docker image runs with `--no-access-log`. If you
@@ -337,6 +347,10 @@ The image works like this:
   to bake in different models.
 - **Starting the server.** The CMD runs the venv's `uvicorn` directly. Do not use `uv run` inside the image,
   because it would re-sync and reinstall CUDA torch.
+- **Parser limits.** Linux containers enforce `RLIMIT_AS` for parser workers. macOS does not reliably enforce
+  that limit, so the app also checks worker RSS and always applies pre-decode pixel limits, bounded frame sizes,
+  a 32 MiB IPC cap and the hard wall-clock deadline. Size the container for the parent model memory plus
+  `BTF_SCAN_CONCURRENCY * BTF_SCAN_MAX_RSS_MB` of parser headroom.
 
 ### Behind a reverse proxy
 
@@ -354,9 +368,9 @@ because clients could then spoof `X-Forwarded-For` to bypass rate limits. Also c
 The rate limiter (`app/ratelimit.py`) keeps its state **in memory, per process**. With `--workers N` or several
 replicas, each process has its own counters, so the effective limit becomes N times the configured value. Run
 a single worker (the image does), or replace the limiter with a shared store such as Redis, or enforce limits
-at the proxy. One process is enough for moderate traffic: scans run in a threadpool, at most
-`BTF_SCAN_CONCURRENCY` at a time (each can hold a decoded image of up to 25 MP plus the model's working memory,
-so size this to your RAM), and inference is serialised per model. The scan slots are also per process.
+at the proxy. One process is enough for moderate traffic: at most `BTF_SCAN_CONCURRENCY` scans run at a time,
+backed by the same number of parser workers, and inference is serialised per model. Scan slots, parser pools and
+loaded models are per web process, so `--workers N` multiplies all three as well as the rate-limit issue above.
 
 ### Persistence
 

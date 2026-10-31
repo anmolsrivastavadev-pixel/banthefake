@@ -266,8 +266,12 @@ def _decode(path: str | Path, max_side: int, tolerant: bool) -> tuple[Image.Imag
                     if scale > 1:
                         im.draft("RGB", (w // scale, h // scale))
                 elif im.size[0] * im.size[1] > MAX_DECODE_PIXELS:
-                    factor = max(2, int((im.size[0] * im.size[1] / MAX_DECODE_PIXELS) ** 0.5 + 0.999))
-                    im = im.reduce(factor)
+                    # Pillow's reduce() first decodes formats such as PNG at full resolution. Refuse them
+                    # before pixel load; metadata and C2PA parsing have already completed.
+                    raise DecodeFailed(
+                        f"the image is {w}×{h} pixels, above the "
+                        f"{MAX_DECODE_PIXELS // 1_000_000} MP the detector can decode"
+                    )
                 if im.size[0] * im.size[1] > MAX_DECODE_PIXELS:
                     raise DecodeFailed(
                         f"the image is {w}\u00d7{h} pixels, above the {MAX_DECODE_PIXELS // 1_000_000} MP the detector can decode"

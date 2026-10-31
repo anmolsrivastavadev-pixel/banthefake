@@ -21,7 +21,7 @@ from app import scan
 from app.config import Settings
 from app.petition import PetitionStore, ValidationError, validate
 from app.ratelimit import RateLimiter
-from app.sniff import pillow_can_open, sniff
+from app.sniff import sniff
 from app.upload import UploadError, receive_file
 
 log = logging.getLogger("banthefake")
@@ -130,6 +130,7 @@ class ScanSlots:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    scan.configure_isolation(settings.scan_concurrency)
     store = PetitionStore(settings.db_path)
     # Petition rate limits: stored signatures count against BTF_SIGN_RATE, so a typo or a duplicate does
     # not use up a household's quota; every attempt (valid or not) counts against the higher
@@ -142,7 +143,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         scan.warmup()  # start loading the detector model in the background
-        yield
+        try:
+            yield
+        finally:
+            scan.shutdown()
 
     app = App(title="BanTheFake", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.settings = settings
@@ -281,8 +285,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if sniffed is None:
                 return error(415, "Unsupported file type. Upload a JPG, PNG, WEBP, GIF, MP4, MOV or WEBM.")
             _, mime = sniffed
-            if mime in ("image/heic", "image/heif") and not await run_in_threadpool(pillow_can_open, tmp_path):
-                return error(415, "HEIC/HEIF images are not supported on this server.")
             filename = os.path.basename(info.filename.replace("\\", "/"))[:255]
             # Decoding media and running the model is memory hungry: bound how many run at once.
             if not await scan_slots.acquire(settings.scan_wait_s):
@@ -300,6 +302,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return error(400, "The upload was interrupted.")
         except scan.UnsupportedMedia as exc:
             return error(415, str(exc))
+        except scan.ScanTimeout:
+            return error(504, "scan_timeout")
+        except scan.ScanFailed:
+            log.exception("isolated scan worker failed")
+            return error(500, "scan_failed")
         except Exception:
             log.exception("scan failed")
             return error(500, "Scan failed.")

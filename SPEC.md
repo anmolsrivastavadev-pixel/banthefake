@@ -21,6 +21,7 @@ app/
     markers.py     raw-byte marker scan (AI generators, editors, IPTC digital source type)
     exif.py        EXIF/XMP extraction (camera make/model, software, dates)
     c2pa_check.py  C2PA manifest reading + validation (optional dependency; degrade gracefully)
+    isolate.py     spawned parser-worker pool, hard deadlines, resource limits and bounded IPC
     model.py       optional ML classifier, lazy-loaded, disabled when `BTF_MODEL=off`
     video.py       frame sampling for video files
 static/index.html
@@ -36,6 +37,17 @@ All JSON. Errors: `{"error": "<message>"}` with proper status code.
   magic bytes; never trust the client content-type alone → 415 otherwise.
 - Upload written to a temp file, always deleted after scan (even on error). Never persisted or logged.
 - Rate limit: `BTF_SCAN_RATE` per minute per IP (default 10) → 429.
+- All byte interpretation (marker scanning, Pillow/EXIF/XMP/PNG, PyAV and C2PA) runs in a spawned parser
+  worker by default (`BTF_SCAN_ISOLATION=on`). The pool size equals `BTF_SCAN_CONCURRENCY`; workers recycle
+  after `BTF_SCAN_WORKER_JOBS` (default 50).
+- Parser jobs have a hard `BTF_SCAN_TIMEOUT_S` deadline (default 30 s). Timeout kills and replaces the worker
+  and returns 504 `{"error": "scan_timeout"}`; a worker crash returns 500 `{"error": "scan_failed"}` and the
+  pool recovers. The route's `finally` still deletes the upload.
+- Workers apply `RLIMIT_AS`/RSS, CPU, file-size and descriptor limits plus bounded pixel/frame/IPC budgets.
+  Non-JPEG images above `BTF_MAX_DECODE_PIXELS` keep metadata/C2PA results but are not pixel-decoded for the
+  model. JPEG uses libjpeg shrink-on-load.
+- Detector inference stays in the parent so both models load once. Workers return at most 32 MiB of validated,
+  downsampled RGB frame bytes; successful isolated and in-process reports have identical shape and content.
 - Response:
 ```json
 {

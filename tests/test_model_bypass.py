@@ -91,11 +91,11 @@ def test_png_text_reader_is_bounded(tmp_path):
     assert len(texts_["Comment"]) == exif.MAX_TEXT
 
 
-def test_png_over_decode_limit_is_reduced(client, detector, monkeypatch):
+def test_png_over_decode_limit_is_not_decoded(client, detector, monkeypatch):
     monkeypatch.setattr(exif, "MAX_DECODE_PIXELS", 10_000)
     body = scan(client, "big.png", media.photo_png())  # 256x192 = 49k pixels
-    assert detector and body["model"] is not None
-    assert detector[0][0].width * detector[0][0].height <= exif.MAX_DECODE_PIXELS
+    assert not detector and body["model"] is None
+    assert COULD_NOT in texts(body) and "above the 0 MP" in texts(body)
 
 
 def test_jpeg_over_decode_limit_is_downscaled(client, detector, monkeypatch):
