@@ -359,13 +359,14 @@ def _verdict(
             edits = ", ".join(_action_name(a) for a in cred.edit_actions[:6])
             return (
                 "verified_capture", "Verified capture with recorded edits",
-                f"Signed by {signer} at capture; recorded edits: {edits}. The file is unchanged since the latest signed edit. "
-                "This proves where the file came from, not that the scene itself is real (for example, it could be a photo of a screen).",
+                f"Trusted credentials signed by {signer} declare a camera capture; recorded edits: {edits}. "
+                "The file is unchanged since the latest signed edit. This confirms the signed provenance, not that the scene "
+                "itself is real (for example, it could be a photo of a screen).",
             )
         return (
             "verified_capture", "Verified camera capture",
-            f"Signed by {signer} at capture and unchanged since. This proves where the file came from, not that the scene itself is real "
-            "(for example, it could be a photo of a screen).",
+            f"Trusted credentials signed by {signer} declare a camera capture, and the file is unchanged since signing. "
+            "This confirms the signed provenance, not that the scene itself is real (for example, it could be a photo of a screen).",
         )
     if cred is not None and cred.readable and cred.valid and cred.trusted and cred.ai_generated:
         signer = cred.signer or cred.issuer or "a trusted signer"

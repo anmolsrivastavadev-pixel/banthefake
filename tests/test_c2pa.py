@@ -93,6 +93,14 @@ def test_official_pixel_capture_is_trusted():
     assert r.trust_list_version == "2026-10-23"
 
 
+def test_official_signer_and_timestamp_roots_are_separate():
+    settings = c2pa_check._context_settings("official")
+    anchors = settings["trust"]["anchors"]
+    assert [entry["trust_kind"] for entry in anchors] == ["manifest", "tsa"]
+    assert "trust_anchors" not in settings["trust"]
+    assert "trust_config" not in settings["trust"]
+
+
 def test_test_certificates_stay_untrusted():
     for name in ("C.jpg", "CA.jpg"):
         r = c2pa_check.read(FIXTURES / name, "image/jpeg")
@@ -113,3 +121,19 @@ def test_trust_can_be_disabled(monkeypatch):
     monkeypatch.setenv("BTF_C2PA_TRUST", "off")
     r = c2pa_check.read(FIXTURES / "pixel10_verified.jpg", "image/jpeg")
     assert r is not None and r.valid and not r.trusted and not r.trust_list_version
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda manifest: manifest.update(assertions=["bad"]),
+        lambda manifest: manifest.update(assertions={"bad": "shape"}),
+        lambda manifest: manifest.update(signature_info="bad"),
+    ],
+)
+def test_malformed_manifest_shapes_do_not_raise(mutation):
+    value = store([])
+    manifest = value["manifests"]["urn:1"]
+    mutation(manifest)
+    result = c2pa_check.summarize(value, "Valid")
+    assert result is not None

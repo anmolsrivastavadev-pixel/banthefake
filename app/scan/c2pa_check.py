@@ -77,20 +77,47 @@ def _get_context():
     override = os.environ.get("BTF_C2PA_TRUST_ANCHORS", "")
     key = (mode, override)
     if _context is None or _context_key != key:
-        settings: dict = {"verify": {"verify_trust": mode != "off", "verify_timestamp_trust": mode != "off",
-                                     "remote_manifest_fetch": False, "ocsp_fetch": False}}
-        if override and Path(override).is_file():
-            anchors = Path(override).read_text()
-            config = (TRUST_DIR / "store.cfg").read_text()
-            settings["trust"] = {"trust_anchors": anchors, "trust_config": config}
-        elif mode == "official":
-            anchors = (TRUST_DIR / "C2PA-TRUST-LIST.pem").read_text()
-            anchors += (TRUST_DIR / "C2PA-TSA-TRUST-LIST.pem").read_text()
-            settings["trust"] = {"trust_anchors": anchors,
-                                 "trust_config": (TRUST_DIR / "store.cfg").read_text()}
+        settings = _context_settings(mode, override)
         _context = Context.from_dict(settings)
         _context_key = key
     return _context
+
+
+def _context_settings(mode: str, override: str = "") -> dict:
+    """Build c2pa-rs settings without letting TSA roots authenticate manifest signers."""
+    enabled = mode != "off"
+    settings: dict = {
+        "verify": {
+            "verify_trust": enabled,
+            "verify_timestamp_trust": enabled,
+            "remote_manifest_fetch": False,
+            "ocsp_fetch": False,
+        }
+    }
+    if override and Path(override).is_file():
+        settings["trust"] = {
+            "anchors": [{
+                "trust_anchors": Path(override).read_text(),
+                "trust_kind": "manifest",
+                "trust_uri": "custom",
+            }]
+        }
+    elif mode == "official":
+        settings["trust"] = {
+            "anchors": [
+                {
+                    "trust_anchors": (TRUST_DIR / "C2PA-TRUST-LIST.pem").read_text(),
+                    "trust_kind": "manifest",
+                    "trust_uri": "https://c2pa.org/trustlist",
+                },
+                {
+                    "trust_anchors": (TRUST_DIR / "C2PA-TSA-TRUST-LIST.pem").read_text(),
+                    "trust_kind": "tsa",
+                    "trust_uri": "https://c2pa.org/tsa-trustlist",
+                },
+            ]
+        }
+    return settings
 
 
 def _is_not_found(exc: Exception) -> bool:
@@ -110,24 +137,40 @@ def read(path: str | Path, mime: str) -> C2PAResult | None:
             return None
         log.info("c2pa read failed: %s", type(exc).__name__)
         return C2PAResult(present=False, readable=False)
-    result = summarize(store, state)
+    try:
+        result = summarize(store, state)
+    except (AttributeError, TypeError, ValueError, KeyError) as exc:
+        log.info("c2pa manifest summary failed: %s", type(exc).__name__)
+        return C2PAResult(present=True, readable=False)
     if result is not None and result.trusted and os.environ.get("BTF_C2PA_TRUST_ANCHORS"):
         result.trust_list_version = "custom"
     return result
 
 
 def summarize(store: dict, state: str | None) -> C2PAResult | None:
+    if not isinstance(store, dict):
+        return None
     manifests = store.get("manifests") or {}
+    if not isinstance(manifests, dict):
+        return None
     m = manifests.get(store.get("active_manifest") or "")
     if not isinstance(m, dict):
         return None
-    actions = [
-        a
-        for x in m.get("assertions") or []
-        if str(x.get("label", "")).startswith("c2pa.actions")
-        for a in (x.get("data") or {}).get("actions") or []
-        if isinstance(a, dict)
-    ]
+    assertions = m.get("assertions") or []
+    if not isinstance(assertions, list):
+        assertions = []
+    actions = []
+    for assertion in assertions:
+        if not isinstance(assertion, dict):
+            continue
+        if not str(assertion.get("label", "")).startswith("c2pa.actions"):
+            continue
+        data = assertion.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        listed = data.get("actions") or []
+        if isinstance(listed, list):
+            actions.extend(action for action in listed if isinstance(action, dict))
     source_types = [str(a["digitalSourceType"]) for a in actions if a.get("digitalSourceType")]
     agents = []
     for a in actions:
@@ -141,6 +184,8 @@ def summarize(store: dict, state: str | None) -> C2PAResult | None:
     failures = [c for c in codes if c not in UNTRUSTED_CODES]
     generator = _generator(m)
     sig = m.get("signature_info") or {}
+    if not isinstance(sig, dict):
+        sig = {}
     common_name = str(sig.get("common_name") or "")
     organisation = str(sig.get("issuer") or "")
     signer = common_name

@@ -83,7 +83,7 @@ def test_official_pixel_is_verified_capture(client):
     body = post(client, "pixel10_verified.jpg", (FIXTURES / "pixel10_verified.jpg").read_bytes())
     assert body["verdict"] == "verified_capture"
     assert body["verdict_title"] == "Verified camera capture"
-    assert "Signed by Pixel Camera (Google LLC) at capture and unchanged since" in body["verdict_detail"]
+    assert "Trusted credentials signed by Pixel Camera (Google LLC) declare a camera capture" in body["verdict_detail"]
     assert "not that the scene itself is real" in body["verdict_detail"]
     assert body["c2pa"]["capture"] is True
     assert body["c2pa"]["trust_list_version"] == "2026-10-23"
