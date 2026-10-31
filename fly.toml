@@ -14,11 +14,12 @@ kill_timeout = "30s"
   BTF_DB_PATH = "/data/banthefake.db"
   # Two vCPUs: match torch's thread count to them.
   BTF_MODEL_THREADS = "2"
-  BTF_SCAN_CONCURRENCY = "2"
-  # Address range the Fly proxy connects from. Uvicorn takes the right-most X-Forwarded-For entry that is
-  # not in this list, i.e. the address the Fly edge appended. Never use "*": uvicorn then takes the
-  # left-most entry, which the client controls. Confirm the range after the first deploy (docs/DEPLOY.md, B5).
-  FORWARDED_ALLOW_IPS = "172.16.0.0/16"
+  # 4 GB profile: 2.5 GB model peak + one worker capped at 1 GB, with the remaining headroom kept small.
+  BTF_SCAN_CONCURRENCY = "1"
+  # Fly overwrites this edge header with the connecting client's address. The app validates it as one IP.
+  BTF_CLIENT_IP_HEADER = "Fly-Client-IP"
+  # Fly terminates TLS; emit HSTS from the app because there is no Caddy layer here.
+  BTF_HSTS = "on"
 
 # One volume, one Machine. The rate limiter and scan slots are in-memory, so never scale above 1.
 [mounts]
@@ -45,9 +46,8 @@ kill_timeout = "30s"
     timeout = "5s"
     grace_period = "60s"
 
-# 2 shared vCPUs + 4 GB RAM. With the media-isolation branch (parser worker pool), use "6gb", or set
-# BTF_SCAN_CONCURRENCY = "1". If `fly_instance_cpu_throttle` shows sustained throttling, switch to
-# size = "performance-2x" (dedicated CPUs, 4 GB).
+# 2 shared vCPUs + 4 GB RAM, sized for BTF_SCAN_CONCURRENCY=1. For concurrency 2, use 8 GB as described
+# in docs/DEPLOY.md. If `fly_instance_cpu_throttle` shows sustained throttling, switch to a dedicated CPU.
 [[vm]]
   size = "shared-cpu-2x"
   memory = "4gb"

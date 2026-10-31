@@ -67,8 +67,9 @@ class SecurityHeadersMiddleware:
     by the catch-all exception handler carry the headers (an @app.middleware("http") would not see them).
     """
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, hsts: bool = False) -> None:
         self.app = app
+        self.hsts = hsts
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -80,6 +81,8 @@ class SecurityHeadersMiddleware:
                 headers = MutableHeaders(scope=message)
                 for key, value in SECURITY_HEADERS.items():
                     headers.setdefault(key, value)
+                if self.hsts:
+                    headers.setdefault("Strict-Transport-Security", "max-age=31536000")
                 # Revalidate (via ETag) on every load so a deploy never leaves visitors on stale JS/CSS.
                 headers.setdefault("Cache-Control", "no-cache")
             await send(message)
@@ -88,8 +91,12 @@ class SecurityHeadersMiddleware:
 
 
 class App(FastAPI):
+    def __init__(self, *args, hsts: bool = False, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.hsts = hsts
+
     def build_middleware_stack(self) -> ASGIApp:
-        return SecurityHeadersMiddleware(super().build_middleware_stack())
+        return SecurityHeadersMiddleware(super().build_middleware_stack(), hsts=self.hsts)
 
 
 def error(status: int, message: str, headers: dict[str, str] | None = None) -> JSONResponse:
@@ -97,6 +104,17 @@ def error(status: int, message: str, headers: dict[str, str] | None = None) -> J
 
 
 def client_ip(request: Request) -> str:
+    """Return the operator-selected client IP, falling back to the socket peer.
+
+    A client-supplied forwarding header is trusted only when the operator explicitly names it. The value
+    must be exactly one IPv4 or IPv6 address; malformed values and forwarding chains are ignored.
+    """
+    header = request.app.state.settings.client_ip_header
+    if header:
+        try:
+            return str(ipaddress.ip_address(request.headers.get(header, "").strip()))
+        except ValueError:
+            pass
     return request.client.host if request.client else "unknown"
 
 
@@ -160,7 +178,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             scan.shutdown()
 
-    app = App(title="BanTheFake", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app = App(
+        title="BanTheFake", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan,
+        hsts=settings.hsts,
+    )
     app.state.settings = settings
     app.state.store = store
 

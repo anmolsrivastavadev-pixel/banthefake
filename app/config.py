@@ -33,6 +33,10 @@ def _float(name: str, default: float) -> float:
     return float(raw) if raw else default
 
 
+def _enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"on", "1", "true", "yes"}
+
+
 @dataclass(frozen=True)
 class Settings:
     db_path: Path = Path("data/banthefake.db")
@@ -45,6 +49,8 @@ class Settings:
     petition_goal: int = 10000
     admin_token: str | None = None
     admin_fail_rate: int = 10  # failed admin authentications per hour per IP
+    client_ip_header: str | None = None  # operator-trusted header containing one IP address
+    hsts: bool = False
     model: str = "auto"
     static_dir: Path = Path(__file__).resolve().parent.parent / "static"
 
@@ -65,5 +71,7 @@ class Settings:
             petition_goal=_int("BTF_PETITION_GOAL", cls.petition_goal),
             admin_token=_admin_token(),
             admin_fail_rate=_int("BTF_ADMIN_FAIL_RATE", cls.admin_fail_rate),
+            client_ip_header=(os.environ.get("BTF_CLIENT_IP_HEADER") or "").strip() or None,
+            hsts=_enabled("BTF_HSTS"),
             model=(os.environ.get("BTF_MODEL") or cls.model).strip().lower(),
         )

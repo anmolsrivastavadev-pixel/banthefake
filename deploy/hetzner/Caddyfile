@@ -5,6 +5,12 @@
 
 {
 	email {$ACME_EMAIL}
+	servers {
+		timeouts {
+			# Slightly above the app's default 30 s end-to-end scan deadline.
+			read_body 35s
+		}
+	}
 }
 
 {$BTF_DOMAIN} {

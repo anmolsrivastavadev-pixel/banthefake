@@ -18,6 +18,11 @@ keep=${KEEP:-14}
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 tmp_in_container=/data/.backup-$stamp.db
 
+cleanup_snapshot() {
+    docker compose exec -T app rm -f "$tmp_in_container" >/dev/null 2>&1 || true
+}
+trap cleanup_snapshot EXIT
+
 install -d -m 700 "$dest"
 umask 077
 

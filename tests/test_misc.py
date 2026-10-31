@@ -14,10 +14,24 @@ def test_static_and_security_headers(client):
     assert res.headers["x-content-type-options"] == "nosniff"
     assert res.headers["x-frame-options"] == "DENY"
     assert "referrer-policy" in res.headers
+    assert "strict-transport-security" not in res.headers
     assert client.get("/app.js").status_code == 200
     css = client.get("/styles.css")
     assert css.status_code == 200
     assert css.headers["cache-control"] == "no-cache"
+
+
+def test_hsts_header_is_opt_in(make_client):
+    client = make_client(hsts=True)
+    assert client.get("/").headers["strict-transport-security"] == "max-age=31536000"
+    assert client.get("/missing").headers["strict-transport-security"] == "max-age=31536000"
+
+
+def test_hsts_setting(monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.setenv("BTF_HSTS", "on")
+    assert Settings.from_env().hsts is True
 
 
 def test_unknown_api_route_json_error(client):

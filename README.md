@@ -164,6 +164,8 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_PETITION_GOAL` | `10000` | The `goal` returned by `/api/petition/count`. |
 | `BTF_ADMIN_TOKEN` | unset | Bearer token for export and erase. It must be at least 24 characters; a shorter or unset token disables the admin endpoints, which then return 404. |
 | `BTF_ADMIN_FAIL_RATE` | `10` | Failed admin authentications allowed per **hour** per client IP. Once the budget is full, all admin requests from that IP return 429 until the window passes, including requests with the correct token. Successful authentication does not use the budget. |
+| `BTF_CLIENT_IP_HEADER` | unset | Opt-in name of an operator-trusted header containing exactly one IPv4 or IPv6 client address (for example, `Fly-Client-IP`). The value is used by scan, petition and failed-admin-authentication limits only when this setting is present. Invalid or missing values fall back to the socket peer. Only use a header the edge overwrites. |
+| `BTF_HSTS` | unset | `on`, `1`, `true` or `yes` adds `Strict-Transport-Security: max-age=31536000` to every response. Enable it only when HTTPS is enforced for the hostname and the TLS proxy is not already adding HSTS. |
 | `BTF_MODEL` | `auto` | `off`, `0`, `false` or `no` disables the ML detector. Any other value enables it when the `ml` extra is installed. |
 | `BTF_MODEL_ID` | `haywoodsloan/ai-image-detector-deploy` | Primary detector (H): Hugging Face model id or local path. It must be an image-classification model with a single "AI" logit or a fake/real head. |
 | `BTF_MODEL_REVISION` | pinned commit for the default model; unset for a custom model | Exact Hugging Face commit/tag for the primary model. Set this when using a remote custom model so deployments are reproducible. |
@@ -183,7 +185,8 @@ All settings are environment variables. The defaults below come from `app/config
 All responses are JSON unless noted. Errors look like `{"error": "<message>"}` with a matching status code,
 including unexpected server errors (500 `{"error": "Internal server error."}`).
 Every response, error responses included, carries a strict CSP, `X-Content-Type-Options: nosniff`,
-`Referrer-Policy: strict-origin-when-cross-origin` and `X-Frame-Options: DENY`.
+`Referrer-Policy: strict-origin-when-cross-origin` and `X-Frame-Options: DENY`. With `BTF_HSTS=on`, it also
+carries `Strict-Transport-Security: max-age=31536000`.
 
 | Method and path | Body | Success | Errors |
 |---|---|---|---|
@@ -374,6 +377,10 @@ because clients could then spoof `X-Forwarded-For` to bypass rate limits. Also c
 - allow request bodies slightly larger than `BTF_MAX_UPLOAD_MB`;
 - allow a read timeout long enough for video scans;
 - terminate TLS.
+
+When a managed edge supplies a dedicated, overwritten client-IP header, set `BTF_CLIENT_IP_HEADER` to that
+header name instead. The app accepts only a single valid IPv4 or IPv6 value and otherwise uses the socket
+peer. This is opt-in because trusting a client-controlled header lets visitors evade rate limits.
 
 ### Single process
 

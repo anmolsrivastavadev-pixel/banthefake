@@ -17,9 +17,10 @@ Ready-to-use config in this repository:
 
 These requirements come from the README and the benchmarks in it:
 
-- **Memory: 4 GB.** Two CPU detector models run in the app process: about 1.5 GB RSS after the first scan
-  and about 2.5 GB at peak during a batch of 8 video frames. The extra headroom is for the OS, the proxy and
-  decoded uploads (`BTF_SCAN_CONCURRENCY`, default 2).
+- **Memory: 4 GB for one scan worker; 8 GB for two.** Two CPU detector models use about 2.5 GB at peak.
+  Each isolated parser worker may use up to `BTF_SCAN_MAX_RSS_MB` (1 GB by default), so the sizing rule is
+  2.5 GB + `BTF_SCAN_CONCURRENCY × 1 GB`, plus container and host headroom. The shipped 4 GB profile uses
+  concurrency 1. Use an 8 GB host and the adjustments below for concurrency 2.
 - **CPU: 2 vCPU.** A scan takes about 0.33 s per image on an Apple M5 and is slower on small cloud vCPUs.
   Sustained CPU matters more than burst CPU when traffic peaks.
 - **Exactly one process, one instance.** The rate limiter and the scan slots are in memory and per process.
@@ -27,18 +28,17 @@ These requirements come from the README and the benchmarks in it:
   moderate traffic.
 - **A persistent volume** for the SQLite petition database (`BTF_DB_PATH`, which is `/data/banthefake.db` in
   the image). It holds personal data (names and emails) and needs backups.
-- **TLS termination in front of the app**, plus a correct `FORWARDED_ALLOW_IPS` so that the rate limiter sees
-  real client IPs.
+- **TLS termination in front of the app**, plus a trustworthy client-IP path so rate limits are per visitor.
+  The Caddy deployment trusts only its fixed proxy address through Uvicorn. Fly uses the edge-set
+  `Fly-Client-IP` header through the opt-in `BTF_CLIENT_IP_HEADER` setting.
 - **An image of about 3 GB.** The image includes about 840 MB of model weights and runs fully offline. A cold
   start takes a few seconds to load the models (`/api/health` reports `"model": "loading"`), and the first scan
   waits for them. Scale-to-zero hosting therefore gives a slow first request.
 
-> **`media-isolation` branch.** That branch runs untrusted-media parsing in a pool of worker processes
-> (pool size = `BTF_SCAN_CONCURRENCY`). Each worker is small when idle, but its *limit* is
-> `BTF_SCAN_MAX_RSS_MB` (default 1024 MB), and the README on that branch says to size the container for
-> the model memory **plus** `BTF_SCAN_CONCURRENCY × BTF_SCAN_MAX_RSS_MB`. With defaults that is about
-> 2.5 GB + 2 GB. On a 4 GB host, either set `BTF_SCAN_CONCURRENCY=1` or move to 8 GB (Hetzner CPX32, or
-> `memory = "6gb"` on Fly). On the 4 GB plan, also raise or remove `mem_limit` in the compose file.
+The Compose app limit is 4 GiB: 2.5 GiB model peak + one worker's 1 GiB limit + 0.5 GiB of app headroom.
+The host's swap absorbs brief pressure outside the container, but sustained swapping is a signal to move to
+the 8 GB profile. For concurrency 2, use an 8 GB host, set `BTF_SCAN_CONCURRENCY=2`, and raise Compose
+`mem_limit` to `5g` (2.5 + 2 × 1 + 0.5 GiB). On Fly, set the Machine memory to `8gb` with concurrency 2.
 
 ## Hosting options compared
 
@@ -49,7 +49,7 @@ modest traffic.
 | Option | Monthly cost (2 vCPU / 4 GB) | Persistent storage | TLS | Cold starts | Egress | Single instance fits? |
 |---|---|---|---|---|---|---|
 | **Hetzner Cloud CPX22** (EU) + Docker + Caddy | **€19.99**, or **€23.99** with Hetzner's daily server backups (+20%) | 80 GB local NVMe included | Caddy + Let's Encrypt (free) | None (always on) | 20 TB included, then €1/TB | Yes, one server |
-| Hetzner Cloud CPX32 (8 GB, 4 vCPU) | €35.99 (+€7.20 backups) | 160 GB included | as above | None | 20 TB included | Yes. Use this for `media-isolation` with default limits |
+| Hetzner Cloud CPX32 (8 GB, 4 vCPU) | €35.99 (+€7.20 backups) | 160 GB included | as above | None | 20 TB included | Yes. Use this for concurrency 2 with the documented 5 GiB app limit |
 | Hetzner Cost-Optimized CX23 / CAX11 (2 vCPU / 4 GB) | €5.99 / €6.49 | 40 GB included | as above | None | 20 TB | Yes, but listed as **"Currently not available"** on 2026-10-31 |
 | Hetzner US (CPX21: 3 vCPU / 4 GB) | €32.49 | 80 GB | as above | None | 2 TB included | Yes |
 | DigitalOcean Droplet (Basic, 2 vCPU / 4 GiB) | $24.00, or $28.80 with weekly backups (+20%) / $31.20 with daily (+30%) | 80 GiB included | Caddy (same config as Option A) | None | 4,000 GiB included, then $0.01/GiB | Yes |
@@ -91,7 +91,7 @@ Notes:
 - **Alternative: Fly.io, `shared-cpu-2x` with 4 GB (Option B), about $26/month.** Choose this if you do not
   want to maintain a server (OS updates, firewall, Docker). It has managed TLS and certificates, a
   one-command deploy and volume snapshots. The trade-offs are shared-CPU throttling under sustained load and
-  a less transparent proxy-address setup (see B5).
+  higher network costs.
 
 ## Environment variables
 
@@ -102,14 +102,16 @@ deployment sets or must think about:
 |---|---|---|---|
 | `BTF_ADMIN_TOKEN` | `.env` | `fly secrets set` | **Required** for export and erase. At least 24 characters, or the admin endpoints stay disabled (404) and an error is logged. |
 | `BTF_ADMIN_FAIL_RATE` | `10` | `10` | Failed admin authentications allowed per client IP per hour. Once full, that IP receives 429 on all admin requests until the window passes. |
-| `FORWARDED_ALLOW_IPS` | fixed in compose: `172.31.250.1` | `fly.toml`: `172.16.0.0/16` (verify) | The address(es) of the proxy only. **Never `*`**: with `*`, uvicorn takes the left-most `X-Forwarded-For` entry, which the client controls. |
+| `FORWARDED_ALLOW_IPS` | fixed in compose: `172.31.250.1` | default; unused for client identity | Caddy's fixed proxy address. **Never `*`**: clients could spoof `X-Forwarded-For`. Fly does not depend on Uvicorn's forwarding-header selection. |
+| `BTF_CLIENT_IP_HEADER` | unset | `Fly-Client-IP` | Opt-in name of an edge-controlled header containing exactly one IPv4 or IPv6 address. Invalid or absent values fall back to the socket peer. Do not enable this for a header clients can supply unchanged. |
+| `BTF_HSTS` | unset | `on` | Adds `Strict-Transport-Security: max-age=31536000`. Fly emits it in the app. Hetzner leaves it unset because Caddy emits HSTS, keeping exactly one source. |
 | `BTF_DB_PATH` | `/data/banthefake.db` (on the `btf-data` volume) | `/data/banthefake.db` (on the `btf_data` volume) | Must be on the persistent volume. |
 | `BTF_MODEL_THREADS` | `2` | `2` | Number of vCPUs. |
-| `BTF_SCAN_CONCURRENCY` | `2` | `2` | Lower it to `1` on 4 GB with the `media-isolation` branch. |
+| `BTF_SCAN_CONCURRENCY` | `1` | `1` | Shipped 4 GB profile. Concurrency 2 needs the 8 GB profile described above. |
 | `BTF_MAX_UPLOAD_MB` | `50` | default | With Option A, keep the Caddyfile `request_body max_size` slightly above it. |
 | `BTF_PETITION_GOAL` | `.env` | `[env]` | Shown on the site. |
 | `BTF_DOMAIN`, `ACME_EMAIL` | `.env` (Caddy only) | n/a | Domain to serve; ACME account contact. |
-| `BTF_SCAN_ISOLATION`, `BTF_SCAN_MAX_RSS_MB`, `BTF_SCAN_TIMEOUT_S`, ... | only on `media-isolation` | same | See that branch's README. Keep isolation on in production. |
+| `BTF_SCAN_ISOLATION`, `BTF_SCAN_MAX_RSS_MB`, `BTF_SCAN_TIMEOUT_S`, ... | defaults | defaults | See the README. Keep isolation on in production. |
 
 `HF_HOME`, `HF_HUB_OFFLINE` and `TRANSFORMERS_OFFLINE` are set by the image. Do not override them.
 
@@ -121,8 +123,8 @@ deployment sets or must think about:
 
 1. In the Hetzner Cloud Console, create a project and add your SSH public key.
 2. Create a server with these settings:
-   - **Type:** CPX22 (Regular Performance, 2 vCPU / 4 GB / 80 GB). Use CPX32 for the `media-isolation`
-     branch with default limits.
+   - **Type:** CPX22 (Regular Performance, 2 vCPU / 4 GB / 80 GB) for concurrency 1. Use CPX32 (8 GB),
+     set concurrency 2, and raise the app limit to `5g` for the two-worker profile.
    - **Location:** NBG1, FSN1 or HEL1.
    - **Image:** Ubuntu 24.04.
    - **Networking:** IPv4 + IPv6.
@@ -190,7 +192,17 @@ How it fits together:
   a client sends.
 - The database is on the named volume `banthefake_btf-data`. Docker initialises it from the image, so it is
   owned by the app user (uid 10001). Caddy's certificates are kept in `banthefake_caddy-data`.
-- The container drops all Linux capabilities, cannot gain privileges, and is limited to 3.5 GB of memory.
+- The app root filesystem is read-only. `/data` is its only persistent writable path. `/tmp` is a 512 MiB
+  tmpfs for streamed uploads and private parser-worker directories: it covers a 50 MiB upload, the 64 MiB
+  per-worker temp quota, worker replacement and several queued uploads. If `BTF_MAX_UPLOAD_MB`,
+  `BTF_SCAN_TEMP_MB`, or concurrency increases, recalculate the tmpfs size. Docker's standard `/dev/shm`
+  remains an ephemeral writable mount for Python multiprocessing primitives.
+- Model weights under `/opt/hf` are baked into the image and loaded with offline mode enabled, so the cache
+  is safe on the read-only root filesystem.
+- Both containers prohibit privilege gain. The app drops all capabilities; Caddy drops all capabilities and
+  adds back only `NET_BIND_SERVICE` for ports 80 and 443. The app is limited to 4 GiB by the calculation above.
+- Caddy allows 35 seconds to read a request body, slightly above the app's 30-second scan deadline. It is the
+  sole HSTS source on this deployment; leave `BTF_HSTS` unset in `.env`.
 
 ### A6. Verify client-IP handling
 
@@ -235,9 +247,32 @@ There are three layers:
 
 **Restore:**
 
+Decrypt and decompress on a trusted admin machine, never on the server that stores the encrypted backups.
+Create the plaintext under `umask 077`, then transfer it with mode 0600. For an encrypted backup:
+
+```bash
+umask 077
+age -d -i ~/btf-backup-key.txt banthefake-XXXX.db.gz.age > restore.db.gz
+gunzip restore.db.gz
+chmod 600 restore.db
+scp -p restore.db root@SERVER:/opt/banthefake/deploy/hetzner/restore.db
+```
+
+If `AGE_RECIPIENT` was not set when the backup ran, start from the unencrypted
+`banthefake-XXXX.db.gz` instead:
+
+```bash
+umask 077
+gunzip -c banthefake-XXXX.db.gz > restore.db
+chmod 600 restore.db
+scp -p restore.db root@SERVER:/opt/banthefake/deploy/hetzner/restore.db
+```
+
+Then, on the server, preserve mode 0600 and stop the app before replacing the live database:
+
 ```bash
 cd /opt/banthefake/deploy/hetzner
-age -d -i ~/btf-backup-key.txt banthefake-XXXX.db.gz.age | gunzip > restore.db
+chmod 600 restore.db
 docker compose stop app
 docker compose cp restore.db app:/data/banthefake.db   # works on a stopped container; lands root-owned
 docker compose run --rm --no-deps --user root app chown 10001:10001 /data/banthefake.db
@@ -269,8 +304,10 @@ docker image prune -f
 - **Rollback:** check out the previous commit and repeat `build` + `up -d`. To roll back without
   rebuilding, tag images before updating, for example
   `docker tag banthefake:local banthefake:prev`.
-- **Caddy:** `docker compose pull caddy && docker compose up -d caddy`. For reproducible builds, pin
-  `caddy:2` to a digest in the compose file.
+- **Caddy:** `docker compose pull caddy && docker compose up -d caddy`.
+- **TODO (requires upstream verification):** pin `caddy:2` to a verified image digest in the Compose file.
+  This checkout was repaired offline, so no digest is guessed here. Verify the digest against Caddy's
+  official image publication before pinning it.
 
 ---
 
@@ -324,13 +361,16 @@ Fly's remote builder builds the Dockerfile, including the BuildKit cache mounts.
 creating a second Machine. `fly.toml` keeps the Machine running (`auto_stop_machines = "off"`,
 `min_machines_running = 1`), so visitors never wait for a cold model load.
 
-### B5. Check `FORWARDED_ALLOW_IPS`
+### B5. Verify `Fly-Client-IP`
 
-`fly.toml` trusts `172.16.0.0/16`, the address range community reports give for the Fly proxy's connections
-to Machines. **Fly's documentation does not state this range, so verify it** with the test from A6, using
-your `fly.dev` or custom domain. If a second network also gets 429, the proxy address is outside the range
-and every visitor shares one bucket. Find the real peer address (for example, temporarily log
-`request.client.host` from a debug build) and set the narrowest CIDR that covers it. Do not use `*`.
+`fly.toml` sets `BTF_CLIENT_IP_HEADER=Fly-Client-IP`, so the application uses Fly's edge-set client address
+for scan, petition, and failed-admin-authentication limits. The app accepts the value only when it parses as
+exactly one IPv4 or IPv6 address; an absent or malformed value falls back to the socket peer. This avoids any
+dependency on a guessed proxy CIDR or on Uvicorn's `X-Forwarded-For` selection.
+
+Run the A6 rate-limit test through the Fly hostname, then try from a second network within the same minute.
+The second network must have a fresh bucket. Do not set `BTF_CLIENT_IP_HEADER` to a header that an internet
+client can pass through unchanged.
 
 ### B6. Custom domain and TLS
 
@@ -340,7 +380,8 @@ fly certs show petition.example.org --app banthefake-CHANGE-ME   # shows the DNS
 ```
 
 Create the records shown (A/AAAA, or a CNAME to `banthefake-CHANGE-ME.fly.dev`). Fly issues and renews the
-certificate. `force_https = true` redirects HTTP to HTTPS.
+certificate. `force_https = true` redirects HTTP to HTTPS. `BTF_HSTS=on` makes the app emit
+`Strict-Transport-Security: max-age=31536000`; there is no second HSTS source on Fly.
 
 ### B7. Backups
 
@@ -364,9 +405,9 @@ while the new Machine boots and loads the models. As in Option A, every deploy o
 in-memory rate limiter. Do not add Machines to get zero downtime. Roll back with
 `fly deploy --image <previous image ref from fly releases --image>`.
 
-Machine size changes (`[[vm]]` in `fly.toml`) apply on the next `fly deploy`. To get dedicated CPUs, use
-`size = "performance-2x"`. For the `media-isolation` branch, use `memory = "6gb"` or
-`BTF_SCAN_CONCURRENCY = "1"`.
+Machine size changes (`[[vm]]` in `fly.toml`) apply on the next `fly deploy`. The shipped 4 GB profile uses
+one parser worker. For concurrency 2, set `BTF_SCAN_CONCURRENCY = "2"` and `memory = "8gb"`. To get dedicated
+CPUs, select a performance Machine size with enough memory for the same profile.
 
 ---
 
@@ -433,8 +474,8 @@ otherwise on a regular schedule. Check the new token with an export
       production depends on.
 - [ ] **`BTF_ADMIN_TOKEN`** is at least 24 random characters, stored in a password manager, and works for an
       export. With a short or missing token, admin endpoints return 404 and GDPR erasure is impossible.
-- [ ] **`FORWARDED_ALLOW_IPS`** passes the A6 test (rate limits are per visitor, and spoofed headers are
-      ignored).
+- [ ] **Client IP:** Option A's `FORWARDED_ALLOW_IPS` passes A6; Option B's `BTF_CLIENT_IP_HEADER` passes B5.
+      Rate limits are per visitor, and a client-supplied forwarding header cannot reset a bucket.
 - [ ] **Single instance:** one container (`docker compose ps`) or one Machine (`fly scale show`). The image
       starts uvicorn with `--workers 1`.
 - [ ] **Persistence:** sign the petition once, restart the app, and the count is unchanged. Delete the test
@@ -444,7 +485,7 @@ otherwise on a regular schedule. Check the new token with an export
 - [ ] **Smoke test:** scan a known AI image (for example `tests/fixtures/ai_dalle_mars.jpg`) and a camera
       photo through the public URL, and test that a 50 MB upload is accepted and a larger one gets 413.
 - [ ] **Memory:** after a few scans, including a video, `docker stats` (A) or Fly metrics (B) show headroom
-      under 4 GB. For the `media-isolation` branch, see the sizing note at the top.
+      under the configured limit. The 4 GB profile uses concurrency 1; concurrency 2 uses the 8 GB profile.
 - [ ] **C2PA trust list** is current (`app/trust/VERSION`), with a reminder set for the next-update date.
 - [ ] **Firewall** (Option A): only 22, 80 and 443 (TCP and UDP) are open, and port 8000 is not reachable from
       outside (`curl http://SERVER_IP:8000` from your machine must fail).

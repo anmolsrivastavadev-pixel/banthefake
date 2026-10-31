@@ -21,10 +21,14 @@ services:
       - "127.0.0.1:8000:8000"
     volumes:
       - btf-data:/data
+    read_only: true
+    tmpfs:
+      # 50 MiB upload + 64 MiB parser-worker quota + replacement/queued-upload headroom.
+      - /tmp:size=512m,mode=1777
     networks:
       - app-net
-    # Two detector models need ~2.5 GB at peak; leave the rest of a 4 GB server for Caddy and the OS.
-    mem_limit: 3500m
+    # 2.5 GiB model peak + one 1 GiB parser worker + 0.5 GiB headroom.
+    mem_limit: 4g
     cap_drop:
       - ALL
     security_opt:
@@ -61,6 +65,12 @@ services:
       - caddy-config:/config
     depends_on:
       - app
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:
