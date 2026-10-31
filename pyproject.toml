@@ -25,7 +25,15 @@ dev = [
     "httpx2>=2.16.0",
     "pytest>=9.2.0",
 ]
+e2e = [
+    "pytest-playwright>=0.10.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["ml: needs the ml extra (torch + transformers) and the detector weights"]
+markers = [
+    "ml: needs the ml extra (torch + transformers) and the detector weights",
+    "e2e: browser end-to-end tests (uv run --group e2e pytest -m e2e); deselected by default",
+]
+# Browser tests need the e2e group and Chromium: keep them out of the default run (`-m e2e` overrides this).
+addopts = ["-m", "not e2e"]
