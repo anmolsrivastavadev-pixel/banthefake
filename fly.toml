@@ -1,0 +1,53 @@
+# Fly.io config for BanTheFake (the alternative deployment; see docs/DEPLOY.md, "Option B").
+# Replace `app` and `primary_region` before the first deploy. Secrets (BTF_ADMIN_TOKEN) are set with
+# `fly secrets set`, never here.
+
+app = "banthefake-CHANGE-ME"
+primary_region = "fra"
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  BTF_DB_PATH = "/data/banthefake.db"
+  # Two vCPUs: match torch's thread count to them.
+  BTF_MODEL_THREADS = "2"
+  BTF_SCAN_CONCURRENCY = "2"
+  # Address range the Fly proxy connects from. Uvicorn takes the right-most X-Forwarded-For entry that is
+  # not in this list, i.e. the address the Fly edge appended. Never use "*": uvicorn then takes the
+  # left-most entry, which the client controls. Confirm the range after the first deploy (docs/DEPLOY.md, B5).
+  FORWARDED_ALLOW_IPS = "172.16.0.0/16"
+
+# One volume, one Machine. The rate limiter and scan slots are in-memory, so never scale above 1.
+[mounts]
+  source = "btf_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Keep the Machine running: a cold start reloads ~840 MB of weights and the first scan waits for it.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 20
+    hard_limit = 40
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/api/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "60s"
+
+# 2 shared vCPUs + 4 GB RAM. With the media-isolation branch (parser worker pool), use "6gb", or set
+# BTF_SCAN_CONCURRENCY = "1". If `fly_instance_cpu_throttle` shows sustained throttling, switch to
+# size = "performance-2x" (dedicated CPUs, 4 GB).
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "4gb"

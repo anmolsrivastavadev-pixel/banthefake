@@ -1,0 +1,80 @@
+# BanTheFake on a single VPS (Hetzner Cloud or any Docker host): app + Caddy with automatic HTTPS.
+# Usage (from this directory): cp .env.example .env && edit .env && docker compose up -d --build
+# See docs/DEPLOY.md, "Option A".
+name: banthefake
+
+services:
+  app:
+    build:
+      context: ../..
+    image: banthefake:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      BTF_DB_PATH: /data/banthefake.db
+      # Caddy runs on the host network and reaches the app through the port published on 127.0.0.1
+      # below; Docker forwards that connection from this network's gateway. Trust only that address,
+      # so uvicorn takes the client IP from the X-Forwarded-For header Caddy sets. Never use "*".
+      FORWARDED_ALLOW_IPS: 172.31.250.1
+    ports:
+      # Loopback only: the app is reachable from the internet solely through Caddy.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - btf-data:/data
+    networks:
+      - app-net
+    # Two detector models need ~2.5 GB at peak; leave the rest of a 4 GB server for Caddy and the OS.
+    mem_limit: 3500m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # The image has no curl; ask the app itself. Healthy once the server answers and the detector is loaded.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,sys,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)); sys.exit(0 if r.get('ok') and r.get('model') in ('loaded', 'off') else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    # Host networking so Caddy sees real client addresses for IPv4 and IPv6 alike (a published port
+    # would hide IPv6 visitors behind Docker's proxy and put them all in one rate-limit bucket).
+    network_mode: host
+    environment:
+      BTF_DOMAIN: ${BTF_DOMAIN:?set BTF_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  app-net:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
+          gateway: 172.31.250.1
+
+volumes:
+  btf-data:
+  caddy-data:
+  caddy-config:
