@@ -12,9 +12,11 @@
 </head>
 <body>
 
-<nav>
+<a class="skip" href="#main">Skip to content</a>
+
+<nav aria-label="Main">
   <div class="wrap">
-    <a href="#" class="logo"><span class="logo-mark"></span>BanTheFake</a>
+    <a href="/" class="logo"><span class="logo-mark" aria-hidden="true"></span>BanTheFake</a>
     <ul class="nav-links">
       <li><a href="#scan">Scan media</a></li>
       <li><a href="#report">Report</a></li>
@@ -25,6 +27,8 @@
     <a href="#act" class="btn btn-red">Sign the petition</a>
   </div>
 </nav>
+
+<main id="main" tabindex="-1">
 
 <header class="hero">
   <div class="wrap">
@@ -51,9 +55,9 @@
       <p>We're not against AI. We're against using someone's likeness without their consent to hurt, deceive, or exploit them.</p>
     </div>
     <div class="cards">
-      <div class="card"><div class="ico">⚠</div><h3>Non-consensual imagery</h3><p>Most harmful deepfakes are sexual images of real people, often women and minors, made and shared without consent.</p></div>
-      <div class="card"><div class="ico">☏</div><h3>Voice-clone scams</h3><p>Scammers clone a relative's voice and call asking for money in a fake emergency. Their targets are often older people.</p></div>
-      <div class="card"><div class="ico">⚑</div><h3>Political lies</h3><p>Fake videos and robocalls of candidates spread faster than fact-checks can catch them, especially just before elections.</p></div>
+      <div class="card"><div class="ico" aria-hidden="true">⚠</div><h3>Non-consensual imagery</h3><p>Most harmful deepfakes are sexual images of real people, often women and minors, made and shared without consent.</p></div>
+      <div class="card"><div class="ico" aria-hidden="true">☏</div><h3>Voice-clone scams</h3><p>Scammers clone a relative's voice and call asking for money in a fake emergency. Their targets are often older people.</p></div>
+      <div class="card"><div class="ico" aria-hidden="true">⚑</div><h3>Political lies</h3><p>Fake videos and robocalls of candidates spread faster than fact-checks can catch them, especially just before elections.</p></div>
     </div>
   </div>
 </section>
@@ -67,13 +71,15 @@
     </div>
     <div class="scanner">
       <label class="drop" id="drop">
-        <input type="file" id="file" accept="image/*,video/*" />
-        <div id="dropInner">
-          <div class="big">Drop a file here</div>
-          <div class="muted">or click to choose: JPG, PNG, WEBP, GIF, MP4, MOV, WEBM</div>
-        </div>
+        <input type="file" id="file" accept="image/*,video/*" aria-describedby="dropHint" />
+        <span id="dropInner">
+          <span class="big">Drop a file here</span>
+          <span class="muted" id="dropHint">or click (or press Enter) to choose: JPG, PNG, WEBP, GIF, MP4, MOV, WEBM</span>
+        </span>
       </label>
       <div class="panel" id="resultPanel">
+        <h3 class="sr-only">Scan results</h3>
+        <p class="sr-only" id="scanStatus" role="status"></p>
         <div class="verdict" id="verdict">
           <span class="dot"></span>
           <div><b>Waiting for a file</b><span class="muted">Results will appear here.</span></div>
@@ -81,7 +87,7 @@
         <ul class="signals" id="signals"></ul>
         <div class="details" id="details"></div>
         <div class="ela-wrap" id="elaWrap">
-          <canvas id="ela"></canvas>
+          <canvas id="ela" role="img" aria-label="Error level analysis heatmap of the uploaded image"></canvas>
           <p><b>Error level analysis:</b> we re-save the image and highlight what changed. Areas that glow much brighter or darker than the rest may have been pasted in or edited. Treat this as a clue, not proof.</p>
         </div>
         <p class="disclaimer">No tool can prove a file is real. Metadata can be stripped or faked, and the best deepfakes leave no obvious traces. Use these results as one clue alongside where the file came from and who shared it.</p>
@@ -98,10 +104,10 @@
       <p>It's not your fault. Save evidence first (screenshots, links, usernames, dates), then use these services.</p>
     </div>
     <div class="report">
-      <a href="https://stopncii.org/" target="_blank" rel="noopener"><h4>StopNCII.org <span>↗</span></h4><p>Adults: create a digital fingerprint of intimate images on your own device so partner platforms can block them. The images themselves are never uploaded.</p></a>
-      <a href="https://takeitdown.ncmec.org/" target="_blank" rel="noopener"><h4>Take It Down (NCMEC) <span>↗</span></h4><p>For images of anyone under 18, including AI-generated ones. Free and anonymous.</p></a>
-      <a href="https://www.ic3.gov/" target="_blank" rel="noopener"><h4>FBI IC3 (US) <span>↗</span></h4><p>Report voice-clone scams, extortion, and fraud that used fake media.</p></a>
-      <a href="https://cybercivilrights.org/ccri-crisis-helpline/" target="_blank" rel="noopener"><h4>CCRI Crisis Helpline <span>↗</span></h4><p>Free, confidential support for victims of image-based abuse.</p></a>
+      <a href="https://stopncii.org/" target="_blank" rel="noopener"><h3>StopNCII.org <span aria-hidden="true">↗</span><span class="sr-only"> (opens in a new tab)</span></h3><p>Adults: create a digital fingerprint of intimate images on your own device so partner platforms can block them. The images themselves are never uploaded.</p></a>
+      <a href="https://takeitdown.ncmec.org/" target="_blank" rel="noopener"><h3>Take It Down (NCMEC) <span aria-hidden="true">↗</span><span class="sr-only"> (opens in a new tab)</span></h3><p>For images of anyone under 18, including AI-generated ones. Free and anonymous.</p></a>
+      <a href="https://www.ic3.gov/" target="_blank" rel="noopener"><h3>FBI IC3 (US) <span aria-hidden="true">↗</span><span class="sr-only"> (opens in a new tab)</span></h3><p>Report voice-clone scams, extortion, and fraud that used fake media.</p></a>
+      <a href="https://cybercivilrights.org/ccri-crisis-helpline/" target="_blank" rel="noopener"><h3>CCRI Crisis Helpline <span aria-hidden="true">↗</span><span class="sr-only"> (opens in a new tab)</span></h3><p>Free, confidential support for victims of image-based abuse.</p></a>
     </div>
   </div>
 </section>
@@ -135,30 +141,43 @@
         <div class="progress"><i id="bar"></i></div>
         <div class="count"><b id="count">0</b> of <span id="goal">10,000</span> signatures</div>
         <form class="stack" id="petition">
-          <input name="name" placeholder="Full name" maxlength="100" required />
-          <input name="email" type="email" placeholder="Email" maxlength="254" required />
-          <input name="location" placeholder="City / country" maxlength="100" />
+          <label class="field" for="pName">Full name
+            <input id="pName" name="name" maxlength="100" autocomplete="name" required />
+          </label>
+          <label class="field" for="pEmail">Email
+            <input id="pEmail" name="email" type="email" maxlength="254" autocomplete="email" required />
+          </label>
+          <label class="field" for="pLocation">City / country (optional)
+            <input id="pLocation" name="location" maxlength="100" />
+          </label>
           <div class="hp" aria-hidden="true"><label>Website <input name="website" tabindex="-1" autocomplete="off" /></label></div>
-          <label class="consent"><input type="checkbox" name="consent" required /><span>I agree to BanTheFake storing my name, email and location to count my signature. We never share your email, and you can ask us to delete your signature at any time.</span></label>
+          <label class="consent"><input type="checkbox" name="consent" required /><span>I agree to BanTheFake storing my name, email and location to count my signature. We never share your email, and you can ask us to delete your signature at any time. See our <a href="/privacy.html">privacy notice</a>.</span></label>
           <button class="btn btn-red" type="submit">Sign now</button>
-          <div class="thanks" id="thanks"></div>
+          <div class="thanks" id="thanks" role="status"></div>
         </form>
       </div>
       <div class="panel">
         <h3>Letter generator</h3>
         <p class="muted">Fill in a few details and copy a ready-to-send letter.</p>
         <form class="stack" id="letterForm">
-          <div class="field">Who are you writing to?
+          <label class="field" for="recipient">Who are you writing to?
             <select id="recipient">
               <option value="rep">My elected representative</option>
               <option value="platform">A social media platform</option>
               <option value="school">My school / university</option>
             </select>
-          </div>
-          <input id="lname" placeholder="Your name" />
-          <input id="lplace" placeholder="Your town / district" />
-          <textarea id="letter" readonly></textarea>
+          </label>
+          <label class="field" for="lname">Your name
+            <input id="lname" autocomplete="name" />
+          </label>
+          <label class="field" for="lplace">Your town / district
+            <input id="lplace" />
+          </label>
+          <label class="field" for="letter">Your letter
+            <textarea id="letter" readonly></textarea>
+          </label>
           <button class="btn btn-ghost" type="button" id="copy">Copy letter</button>
+          <p class="sr-only" id="copyStatus" role="status"></p>
         </form>
       </div>
     </div>
@@ -177,10 +196,13 @@
   </div>
 </section>
 
+</main>
+
 <footer>
   <div class="wrap">
-    <a href="#" class="logo"><span class="logo-mark"></span>BanTheFake</a>
+    <a href="/" class="logo"><span class="logo-mark" aria-hidden="true"></span>BanTheFake</a>
     <span>If you are in immediate danger, contact local emergency services.</span>
+    <a href="/privacy.html">Privacy notice</a>
   </div>
 </footer>
 

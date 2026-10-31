@@ -2,7 +2,8 @@
 
 A self-hostable campaign site against harmful deepfakes, with working tools:
 
-- **Campaign site**: a single static page (`static/index.html`, `static/app.js`, `static/styles.css`), with no build step.
+- **Campaign site**: a static page (`static/index.html`, `static/app.js`, `static/styles.css`) plus a privacy
+  notice (`static/privacy.html`), with no build step.
 - **Media scanner**: upload an image or video. The server checks it for AI-generator markers, IPTC "digital
   source type", EXIF/XMP camera and editing-software metadata, and C2PA Content Credentials, and runs an optional
   ML detector. The browser also shows a client-side ELA (error level analysis) heatmap.
@@ -167,6 +168,12 @@ curl -fsS -X DELETE -H "Authorization: Bearer $BTF_ADMIN_TOKEN" \
   run Uvicorn yourself, pass that flag too, or configure your reverse proxy's logs to match your privacy policy.
 - **Third parties**: the page loads Google Fonts (allowed by the CSP). Self-host the fonts if you want no
   third-party requests.
+- **Privacy notice**: `static/privacy.html` describes the behaviour above to visitors and is linked from the
+  petition consent text and the footer. **Before launch, replace the placeholder address
+  `privacy@YOUR-DOMAIN.example`** (it appears twice in that file) with a real, monitored inbox, and review the
+  page against your own hosting setup (proxy or host logs) and any legal advice you have. Deletion requests
+  sent there are handled with the admin `DELETE /api/petition` call shown above. If you self-host the fonts,
+  update the "Third parties" section of the page.
 
 ## Deployment
 

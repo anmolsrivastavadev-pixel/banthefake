@@ -19,6 +19,7 @@ const verdict = document.getElementById('verdict');
 const signalsEl = document.getElementById('signals');
 const detailsEl = document.getElementById('details');
 const elaWrap = document.getElementById('elaWrap');
+const scanStatus = document.getElementById('scanStatus');
 
 ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
@@ -54,7 +55,11 @@ async function scan(file) {
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = URL.createObjectURL(file);
   const isImage = file.type.startsWith('image/');
-  dropInner.replaceChildren(isImage ? el('img', { src: previewUrl, alt: '' }) : el('video', { src: previewUrl, controls: '', muted: '' }));
+  dropInner.replaceChildren(isImage
+    ? el('img', { src: previewUrl, alt: `Preview of ${file.name}` })
+    : el('video', { src: previewUrl, controls: '', muted: '', 'aria-label': `Preview of ${file.name}` }));
+  // The preview replaced the visible label text, so keep the file input named for screen readers.
+  fileInput.setAttribute('aria-label', 'Choose another image or video to scan');
   setVerdict('loading', 'Scanning…', file.name);
   signalsEl.replaceChildren();
   detailsEl.replaceChildren();
@@ -80,10 +85,12 @@ async function scan(file) {
     return;
   }
   renderReport(data);
+  const n = (data.signals || []).length;
+  announce(`Scan finished. ${data.verdict_title}. ${data.verdict_detail || ''} ${n} ${n === 1 ? 'signal' : 'signals'} listed below.`);
 }
 
 function renderReport(r) {
-  setVerdict(VERDICT_CLASS[r.verdict] ?? '', r.verdict_title, r.verdict_detail);
+  setVerdict(VERDICT_CLASS[r.verdict] ?? '', r.verdict_title, r.verdict_detail, false);
   signalsEl.replaceChildren(...(r.signals || []).map(s => {
     const [cls, label] = TAGS[s.kind] || TAGS.info;
     return el('li', {}, el('span', { class: `tag ${cls}` }, label), el('span', {}, s.text));
@@ -149,7 +156,7 @@ function modelBlock(m) {
   ]);
   b.append(meter(p, 'Estimated chance this is AI-generated'));
   if (Array.isArray(m.frame_probabilities) && m.frame_probabilities.length > 1) {
-    const strip = el('div', { class: 'frames', 'aria-label': 'Per-frame estimates' });
+    const strip = el('div', { class: 'frames', role: 'img', 'aria-label': `Per-frame estimates: ${m.frame_probabilities.map(fp => `${pct(fp)}%`).join(', ')}` });
     m.frame_probabilities.forEach((fp, i) => {
       const bar = el('i', { class: meterClass(fp), title: `Frame ${i + 1}: ${pct(fp)}%` });
       bar.style.height = `${pct(fp)}%`;
@@ -164,12 +171,19 @@ function modelBlock(m) {
 function block(title, rows) {
   const dl = el('dl');
   for (const [k, v] of rows) if (v) dl.append(el('dt', {}, k), el('dd', {}, v));
-  return el('div', { class: 'block' }, el('h4', {}, title), dl);
+  return el('div', { class: 'block' }, el('h3', {}, title), dl);
 }
 
-function setVerdict(cls, title, body) {
+function setVerdict(cls, title, body, speak = true) {
   verdict.className = 'verdict ' + cls;
   verdict.replaceChildren(el('span', { class: 'dot' }), el('div', {}, el('b', {}, title), el('span', { class: 'muted' }, body)));
+  if (speak) announce(`${title}. ${body}`);
+}
+
+// Polite live region: screen readers hear scan progress and results without losing their place.
+function announce(text) {
+  scanStatus.textContent = '';
+  setTimeout(() => { scanStatus.textContent = text; }, 50);
 }
 
 function runELA(url) {
@@ -319,9 +333,17 @@ function renderLetter() {
   );
 }
 ['recipient', 'lname', 'lplace'].forEach(id => document.getElementById(id).addEventListener('input', renderLetter));
+const copyStatus = document.getElementById('copyStatus');
 document.getElementById('copy').addEventListener('click', async e => {
-  await navigator.clipboard.writeText(letterEl.value);
-  e.target.textContent = 'Copied ✓';
-  setTimeout(() => e.target.textContent = 'Copy letter', 1500);
+  const button = e.currentTarget;
+  try {
+    await navigator.clipboard.writeText(letterEl.value);
+    button.textContent = 'Copied ✓';
+    copyStatus.textContent = 'Letter copied to the clipboard.';
+  } catch {
+    letterEl.select();
+    copyStatus.textContent = 'Could not copy automatically. The letter is selected: press Ctrl+C or Cmd+C to copy it.';
+  }
+  setTimeout(() => { button.textContent = 'Copy letter'; copyStatus.textContent = ''; }, 3000);
 });
 renderLetter();
