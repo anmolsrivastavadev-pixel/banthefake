@@ -6,15 +6,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from app import scan
 from app.mcp_server import NO_PROOF, TOOLS, call_tool, serve
 from tests.conftest import FIXTURES
-
-
-@pytest.fixture(autouse=True)
-def _close_parser_pool():
-    yield
-    scan.shutdown()
 
 
 def _png(path: Path) -> Path:
