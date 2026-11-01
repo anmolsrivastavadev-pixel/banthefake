@@ -79,7 +79,7 @@ jobs:
             type=raw,value=latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.licenses=NOASSERTION
+            org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Build and push image
