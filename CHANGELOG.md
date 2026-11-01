@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- "Check this video with BanTheFake" in the browser extension: captures up to 8 frames (about 8 seconds, or the
+  current frame when paused) from the video playing in the user's tab, including on YouTube and TikTok, and sends
+  only those frames. Protected (DRM) and cross-origin videos are refused with nothing sent.
+- `POST /api/scan-frames`: scans up to 16 captured frames as an ordered video sample with the existing isolated
+  image parser and video aggregation rule. The server never fetches videos or URLs. Accuracy on AI-generated video
+  has not been benchmarked yet.
+
 ## [1.0.0] - 2026-11-01
 
 ### Added

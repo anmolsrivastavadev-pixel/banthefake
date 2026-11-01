@@ -98,7 +98,9 @@ AI assistants can use the same scanner locally through the stdio MCP server. See
 restrictions and interpretation limits.
 
 A browser extension (Chrome/Edge, Manifest V3) adds "Check with BanTheFake" to the right-click menu on images and
-sends the image only to the server you configure. See [`docs/EXTENSION.md`](docs/EXTENSION.md).
+sends the image only to the server you configure. It can also check a video you are watching (including on YouTube
+and TikTok): it copies up to 8 frames from the playing `<video>` in your tab and sends only those frames. The
+server never downloads videos or any URL. See [`docs/EXTENSION.md`](docs/EXTENSION.md).
 
 ## Discord bot
 
@@ -181,7 +183,7 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_ENV` | `development` | `production` or `development`. In `production` the app refuses to start (logs `Refusing to start: ...` and exits with status 1) while `BTF_PRIVACY_CONTACT` is unset or a placeholder (`YOUR-DOMAIN.example`, or an `example.com/.org/.net`, `.example`, `.test`, `.invalid` or `localhost` domain). Any other value is a startup error. The shipped `.env.example` and `fly.toml` set `production`. |
 | `BTF_ADMIN_FAIL_RATE` | `10` | Failed admin authentications allowed per **hour** per client IP. Once the budget is full, all admin requests from that IP return 429 until the window passes, including requests with the correct token. Successful authentication does not use the budget. |
 | `BTF_CLIENT_IP_HEADER` | unset | Opt-in name of an operator-trusted header containing exactly one IPv4 or IPv6 client address (for example, `Fly-Client-IP`). The value is used by scan, petition and failed-admin-authentication limits only when this setting is present. Invalid or missing values fall back to the socket peer. Only use a header the edge overwrites. |
-| `BTF_CORS_ORIGINS` | unset | Opt-in, comma-separated list of exact, lowercase origins (for example `chrome-extension://<id>`) allowed to read `POST /api/scan` and `GET /api/health` responses cross-origin. No wildcards, paths or credentials; invalid entries stop the app from starting. Other routes never get CORS headers. Unset means no CORS headers at all. Only needed for the browser extension when users do not grant it host access (see [`docs/EXTENSION.md`](docs/EXTENSION.md)). |
+| `BTF_CORS_ORIGINS` | unset | Opt-in, comma-separated list of exact, lowercase origins (for example `chrome-extension://<id>`) allowed to read `POST /api/scan`, `POST /api/scan-frames` and `GET /api/health` responses cross-origin. No wildcards, paths or credentials; invalid entries stop the app from starting. Other routes never get CORS headers. Unset means no CORS headers at all. Only needed for the browser extension when users do not grant it host access (see [`docs/EXTENSION.md`](docs/EXTENSION.md)). |
 | `BTF_HSTS` | unset | `on`, `1`, `true` or `yes` adds `Strict-Transport-Security: max-age=31536000` to every response. Enable it only when HTTPS is enforced for the hostname and the TLS proxy is not already adding HSTS. |
 | `BTF_MODEL` | `auto` | `off`, `0`, `false` or `no` disables the ML detector. Any other value enables it when the `ml` extra is installed. |
 | `BTF_MODEL_ID` | `haywoodsloan/ai-image-detector-deploy` | Primary detector (H): Hugging Face model id or local path. It must be an image-classification model with a single "AI" logit or a fake/real head. |
@@ -209,6 +211,7 @@ carries `Strict-Transport-Security: max-age=31536000`.
 |---|---|---|---|
 | `GET /api/health` | none | 200 `{"ok": true, "model": "loaded"\|"degraded"\|"loading"\|"off"\|"unavailable", "c2pa": bool}` (`degraded`: one of the two detector models failed to load) | none |
 | `POST /api/scan` | `multipart/form-data`, field `file` | 200 scan report (below) | 400 (not multipart, no `file` field, empty, malformed or unterminated upload, client disconnected), 408 `upload_timeout`, 413 too large, 415 unsupported type (also audio-only MP4), 429 rate limited, 503 `busy` (no scan slot within `BTF_SCAN_WAIT_S`), 504 `scan_timeout`, 500 `scan_failed` |
+| `POST /api/scan-frames` | `multipart/form-data`, 1 to 16 parts named `frames` (JPEG, PNG or WEBP; at most 4 MB each and 16 MB in total, also capped by `BTF_MAX_UPLOAD_MB`), in playback order | 200 scan report with `file.type: "video_frames"` (below) | 400 (not multipart, no `frames` part, empty part, malformed upload, client disconnected), 408 `upload_timeout`, 413 too many parts or too large, 415 a part is not JPEG/PNG/WEBP or no frame decodes, 429 rate limited (shares the `BTF_SCAN_RATE` budget with `/api/scan`), 503 `busy`, 504 `scan_timeout`, 500 `scan_failed` |
 | `POST /api/petition` | `application/json`, at most 16 KB: `{"name", "email", "location"?, "consent": true, "website"?}` | 201 `{"ok": true}` | 400 body is not a JSON object, 409 `already_signed`, 413 body over 16 KB, 415 not `application/json`, 422 validation, 429 rate limited |
 | `GET /api/petition/count` | none | 200 `{"count": int, "goal": int}` | none |
 | `GET /api/petition/export.csv` | admin bearer token | 200 `text/csv` (`name,email,location,created_at`) | 401 wrong or missing token, 404 admin disabled, 429 failed-authentication limit reached |
@@ -292,6 +295,28 @@ For videos, each `ai_probability` is the mean of that model's most suspicious ha
 `frame_probabilities` (primary model), `frame_timestamps`, `coverage` (`first_s`, `last_s`, `duration_s`), and
 `frames_likely` / `frames_possible` (sampled frames individually rated "likely" / "possible").
 Each `models` entry also has its own `frame_probabilities`.
+
+#### Frames captured from a playing video (`POST /api/scan-frames`)
+
+This endpoint is for the browser extension's "Check this video" entry. The extension copies frames from the
+`<video>` the user is already playing in their own tab and uploads only those still images. **The server never
+fetches a video or any URL** (no YouTube/TikTok downloading: platform terms and SSRF risk); there is no URL
+parameter, and `tests/test_scan_frames.py` checks statically that `app/` contains no URL-fetching code.
+
+- Each part is sniffed by magic bytes and decoded by the same isolated image parser as `/api/scan` (one worker
+  job per frame, one hard `BTF_SCAN_TIMEOUT_S` deadline for the whole request, one scan slot). Undecodable frames
+  are skipped and reported; if none decodes, the response is 415.
+- Metadata, C2PA and generator markers in the frames are **ignored**: a canvas capture carries none of the
+  original video's. An `info` signal says so, and `c2pa` is always `null`.
+- The frames are treated as an ordered video sample: the per-frame detector decision and the video aggregation
+  rule are the same as for uploaded videos (the tier reached by a majority of the most suspicious half of frames;
+  any single frame rated "likely" makes the result at least "possible"). A single frame (paused video) is decided
+  like one image.
+- `file` is `{"type": "video_frames", "mime": "image/jpeg", "size_bytes": ..., "frames_checked": N, "width": ...,
+  "height": ...}` (`mime` is `image/*` when the formats are mixed). An `info` signal states that the frames were
+  captured from a video playing in the browser, that screen capture and re-compression reduce detector
+  reliability, that audio is not analysed, and that no tool can prove a file is real.
+- Accuracy on AI-generated **video** has not been benchmarked; see [`docs/EXTENSION.md`](docs/EXTENSION.md#video-limits).
 
 ### Updating the C2PA trust list
 

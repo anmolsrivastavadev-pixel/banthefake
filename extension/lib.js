@@ -6,6 +6,14 @@ export const DEFAULT_SERVER = 'https://YOUR-DOMAIN.example';
 // Same as the server's default BTF_MAX_UPLOAD_MB (50). The server enforces its own limit too (413).
 export const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
 export const NO_PROOF = 'No tool can prove a file is real.';
+// Video checks: frames captured from the playing <video> by capture.js. The server accepts up to 16 frames, 4 MB
+// each and 16 MB in total (POST /api/scan-frames); the extension sends at most 8 frames and about 12 MB.
+export const MAX_VIDEO_FRAMES = 8;
+export const MAX_VIDEO_PAYLOAD_BYTES = 12 * 1024 * 1024;
+// Players whose video sits under overlays, so a right-click there opens the "page" menu, not the "video" one.
+// The page-level entry only appears on these sites (a documentUrlPatterns filter needs no host permission).
+export const VIDEO_PAGE_PATTERNS = ['https://*.youtube.com/*', 'https://*.tiktok.com/*'];
+const LABEL_PLATFORMS = ['youtube.com', 'tiktok.com'];
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1']);
 // RFC 2606 / RFC 6761 names that can never be a real BanTheFake deployment.
@@ -59,6 +67,10 @@ export function originPattern(server) {
 
 export function scanEndpoint(base) {
   return `${base}/api/scan`;
+}
+
+export function framesEndpoint(base) {
+  return `${base}/api/scan-frames`;
 }
 
 export function healthEndpoint(base) {
@@ -259,6 +271,13 @@ const HTTP_ERRORS = {
   504: ['Scan timed out', 'The scan took too long. Please try again.'],
 };
 
+const VIDEO_HTTP_ERRORS = {
+  404: ['Server does not support video checks', 'This BanTheFake server is too old to check videos. Ask its operator to update it.'],
+  405: ['Server does not support video checks', 'This BanTheFake server is too old to check videos. Ask its operator to update it.'],
+  413: ['Frames too large', 'The captured frames are over the server\'s upload limit.'],
+  415: ['Could not check this video', 'The server could not read the captured frames.'],
+};
+
 const FETCH_ERRORS = {
   too_large: ['Image too large', 'This image is over 50 MB, so it was not sent.'],
   empty: ['Empty image', 'The image has no data, so it was not sent.'],
@@ -269,13 +288,18 @@ const FETCH_ERRORS = {
   unsupported_url: ['Could not read this image', 'This kind of image address cannot be read. Nothing was sent. Save the image and upload it on the BanTheFake site instead.'],
   not_configured: ['Set up your server first', 'Choose which BanTheFake server to use in the extension options. Nothing was sent.'],
   network: ['Could not reach the scanner', 'Check your connection and the server address in the options, then try again.'],
+  protected: ['This video can\'t be captured', 'This video can\'t be captured (protected or cross-origin) — nothing was sent.'],
+  no_video: ['No video found', 'No visible video was found where you clicked. Start the video, then right-click it again. Nothing was sent.'],
+  not_ready: ['Video not loaded yet', 'The video has no picture yet. Let it play for a moment, then try again. Nothing was sent.'],
+  frames_too_large: ['Frames too large', 'The captured frames are over the 12 MB limit, so they were not sent.'],
   bad_response: ['Unexpected response', 'The server did not return a BanTheFake scan report. Check the server address in the options.'],
 };
 
 /** Title and message for a failure: `code` is an HTTP status (number) or a FETCH_ERRORS key. */
-export function describeError(code, serverMessage) {
+export function describeError(code, serverMessage, kind = 'image') {
   if (typeof code === 'number') {
-    const [title, detail] = HTTP_ERRORS[code] || ['Scan failed', 'Something went wrong. Please try again.'];
+    const table = kind === 'video' && Object.hasOwn(VIDEO_HTTP_ERRORS, code) ? VIDEO_HTTP_ERRORS : HTTP_ERRORS;
+    const [title, detail] = table[code] || ['Scan failed', 'Something went wrong. Please try again.'];
     const msg = str(serverMessage);
     // A 415 message from the server names the accepted types precisely; short codes like "busy" add nothing.
     return { title, detail: code === 415 && msg.includes(' ') ? msg : detail };
@@ -285,4 +309,45 @@ export function describeError(code, serverMessage) {
   }
   const [title, detail] = FETCH_ERRORS[code] || FETCH_ERRORS.network;
   return { title, detail };
+}
+
+// ---------- Video checks ----------
+
+/** Total bytes of captured frames ({ size }), and whether they fit the extension's payload cap. */
+export function framesPayload(frames, cap = MAX_VIDEO_PAYLOAD_BYTES) {
+  const bytes = (Array.isArray(frames) ? frames : []).reduce((n, f) => n + (Number(f?.size) || 0), 0);
+  return { bytes, ok: bytes > 0 && bytes <= cap && frames.length <= MAX_VIDEO_FRAMES };
+}
+
+/** True for youtube.com, tiktok.com and their subdomains (platforms with their own "AI-generated" labels). */
+export function isLabelPlatform(host) {
+  const h = String(host || '').toLowerCase().replace(/\.$/, '');
+  return LABEL_PLATFORMS.some(p => h === p || h.endsWith(`.${p}`));
+}
+
+function seconds(s) {
+  const n = Math.max(1, Math.round(Number(s) || 0));
+  return `~${n} second${n === 1 ? '' : 's'}`;
+}
+
+/**
+ * What the result window says about a video check, besides the server's report. Never claims a video is real.
+ * `capture`: { frames (count), spanS, paused, playbackStopped }, `host`: the page's hostname (shown only here;
+ * it is never sent to the server).
+ */
+export function describeVideoCheck(capture, host) {
+  const n = Math.max(0, Number(capture?.frames) || 0);
+  let summary;
+  if (capture?.paused) summary = 'Paused — 1 frame checked.';
+  else if (n <= 1) summary = '1 frame checked (the video stopped or did not advance while capturing).';
+  else summary = `${n} frames checked over ${seconds(capture.spanS)} of playback.`;
+  if (!capture?.paused && capture?.playbackStopped && n > 1) summary += ' Playback stopped before all frames were captured.';
+  const notes = [
+    'Frames were copied from the video playing in your browser. Screen capture and re-compression make the detector less reliable, and audio is not analysed.',
+    'AI-video detection has not been benchmarked yet: treat any result as a hint, not a finding.',
+  ];
+  if (isLabelPlatform(host)) notes.push("Platform labels (like 'AI-generated' tags) aren't read by this tool.");
+  const rows = [['Checked', summary]];
+  if (host) rows.push(['Video on', `${host} (the page address was not sent)`]);
+  return { summary, rows, notes };
 }
