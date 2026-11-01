@@ -411,6 +411,18 @@ loaded models are per web process, so `--workers N` multiplies all three as well
 Signatures live in the SQLite file at `BTF_DB_PATH`. Mount a persistent volume there, `/data` in Docker, and
 back it up. Without a volume, signatures are lost when the container is removed.
 
+## Contributing
+
+Contributions are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, test commands, coding
+conventions, pull request checks, and the project's rules for honest and safe detector research. Participation
+is governed by the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+
+## Security
+
+Please report suspected vulnerabilities privately through GitHub Security Advisories. See
+[`SECURITY.md`](SECURITY.md) for scope, safe-testing rules, and response expectations; do not open a public
+vulnerability issue.
+
 ## Running tests
 
 ```bash

@@ -1,0 +1,79 @@
+name: Wrong or surprising verdict
+description: Report a scanner verdict that you think is wrong.
+title: "[False result]: "
+labels:
+  - false-result
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Detector results are evidence, not proof that a file or scene is real or fake. Negative and inconclusive
+        results are useful to the project.
+
+        **Do not upload intimate or private images of real people. Do not link to them.** Describe the file and
+        result instead. If a safe, redistributable example is necessary, maintainers can discuss a synthetic or
+        non-sensitive substitute with you.
+  - type: dropdown
+    id: file_type
+    attributes:
+      label: File type
+      options:
+        - JPEG image
+        - PNG image
+        - WebP image
+        - GIF image
+        - HEIC or HEIF image
+        - MP4 video
+        - MOV video
+        - WebM video
+        - Other or unknown
+    validations:
+      required: true
+  - type: dropdown
+    id: verdict
+    attributes:
+      label: Verdict shown
+      options:
+        - verified_capture
+        - verified_ai
+        - ai
+        - edited
+        - camera
+        - unknown
+        - Scan failed or no verdict
+    validations:
+      required: true
+  - type: textarea
+    id: reason
+    attributes:
+      label: Why do you think the result is wrong?
+      description: Describe what you know about the file's source and processing without identifying a private person.
+    validations:
+      required: true
+  - type: textarea
+    id: signals
+    attributes:
+      label: Report details
+      description: Paste the textual signals, model decision or probabilities, and C2PA status. Remove personal metadata and paths.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: transformations
+    attributes:
+      label: Known transformations
+      description: Describe resizing, recompression, screenshots, editing, social-app sharing, or format conversion.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the commit hash, branch, release, or deployment version if known.
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I have not attached or linked intimate or private media of a real person.
+          required: true
+        - label: I understand that BanTheFake cannot prove that a file or depicted scene is real.
+          required: true

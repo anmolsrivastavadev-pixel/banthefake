@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/anmolsrivastavadev-pixel/banthefake/blob/main/SECURITY.md
+    about: Read the private reporting instructions; do not disclose vulnerabilities in an issue.
+  - name: Documentation and help
+    url: https://github.com/anmolsrivastavadev-pixel/banthefake#readme
+    about: Read setup, scanner limits, privacy information, and links to support resources.
