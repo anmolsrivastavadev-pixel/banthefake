@@ -1,0 +1,74 @@
+name: Bug report
+description: Report reproducible behavior that is broken or unexpected.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. For security vulnerabilities, use the private process in SECURITY.md instead.
+        Do not include private media, petition data, credentials, or other personal information.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Give the smallest safe sequence that reproduces the problem.
+      placeholder: |
+        1. Start the app with ...
+        2. Open ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the commit hash, branch, release, or Docker image tag.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Web interface
+        - Scan API or upload handling
+        - Metadata or marker checks
+        - C2PA
+        - ML detector
+        - Petition or admin endpoints
+        - MCP server
+        - Deployment or documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Python version, browser if relevant, and important non-secret configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or output
+      description: Remove tokens, personal data, local private paths, and sensitive media details.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed secrets and personal information from this report.
+          required: true
+        - label: This report does not disclose a security vulnerability publicly.
+          required: true

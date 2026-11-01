@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest a focused improvement to BanTheFake.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the user need and how the idea fits BanTheFake's privacy, safety, and honest-reporting rules.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or need
+      description: Who needs this, and what can they not do today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the behavior or interface you would add.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe current workarounds or other approaches you considered.
+  - type: textarea
+    id: risks
+    attributes:
+      label: Privacy, safety, and accuracy considerations
+      description: Note effects on uploads, personal data, detector claims, resource use, or abuse risk.
+    validations:
+      required: true
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Project rules
+      options:
+        - label: This feature will not claim that a file or depicted scene is real.
+          required: true
+        - label: Any proposed manipulated-media examples use synthetic people only.
+          required: true
