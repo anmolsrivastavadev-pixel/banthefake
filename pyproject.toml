@@ -18,6 +18,9 @@ ml = [
     "torch>=2.15.0",
     "transformers>=5.22.1",
 ]
+mcp = [
+    "mcp>=1.0",
+]
 
 [dependency-groups]
 dev = [
