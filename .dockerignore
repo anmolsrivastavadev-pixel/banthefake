@@ -12,3 +12,5 @@ Dockerfile
 README.md
 deploy/hetzner/.env
 extension
+.env
+bot/.venv

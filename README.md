@@ -100,6 +100,12 @@ restrictions and interpretation limits.
 A browser extension (Chrome/Edge, Manifest V3) adds "Check with BanTheFake" to the right-click menu on images and
 sends the image only to the server you configure. See [`docs/EXTENSION.md`](docs/EXTENSION.md).
 
+## Discord bot
+
+The optional Discord bot adds `/scan`, `/help`, and a private-by-default **Check with BanTheFake** message action.
+It forwards Discord-hosted attachments to your BanTheFake server and never runs detectors or stores media itself.
+See [`docs/DISCORD.md`](docs/DISCORD.md) for safe app setup, configuration, deployment, and limits.
+
 With the `ml` extra installed, both detector models load in the background at startup (`/api/health` reports
 `"model": "loading"`, then `"loaded"`, or `"degraded"` if one of the two models failed to load and the other
 runs). On first use they download about 840 MB of weights from the Hugging Face
