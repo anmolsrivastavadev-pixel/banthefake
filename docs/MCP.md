@@ -21,7 +21,7 @@ boundary. Download a file yourself, inspect it, and pass its local path to `scan
 From any directory, replace `/path/to/banthefake` with this repository's absolute path:
 
 ```bash
-claude mcp add banthefake -- uv run --directory /path/to/banthefake --extra ml banthefake-mcp
+claude mcp add banthefake -- uv run --directory /path/to/banthefake --extra ml python -m app.mcp_server
 ```
 
 Use `claude mcp list` to check that the server is registered. The `ml` extra installs both detector models'
@@ -36,7 +36,7 @@ Add this to `~/.codex/config.toml`, again using the repository's absolute path:
 ```toml
 [mcp_servers.banthefake]
 command = "uv"
-args = ["run", "--directory", "/path/to/banthefake", "--extra", "ml", "banthefake-mcp"]
+args = ["run", "--directory", "/path/to/banthefake", "--extra", "ml", "python", "-m", "app.mcp_server"]
 ```
 
 Restart Codex after changing the configuration.
@@ -50,7 +50,7 @@ Configure a stdio server with this command and argument array:
   "mcpServers": {
     "banthefake": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/banthefake", "--extra", "ml", "banthefake-mcp"]
+      "args": ["run", "--directory", "/path/to/banthefake", "--extra", "ml", "python", "-m", "app.mcp_server"]
     }
   }
 }
@@ -59,7 +59,7 @@ Configure a stdio server with this command and argument array:
 Clients that accept a single command line can use:
 
 ```bash
-uv run --directory /path/to/banthefake --extra ml banthefake-mcp
+uv run --directory /path/to/banthefake --extra ml python -m app.mcp_server
 ```
 
 The core scanner still checks metadata and Content Credentials without ML dependencies. Omit `--extra ml` and

@@ -75,7 +75,7 @@ wheels = [
 [[package]]
 name = "banthefake"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "av" },
     { name = "c2pa-python" },
