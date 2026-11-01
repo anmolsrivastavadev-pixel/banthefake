@@ -93,6 +93,10 @@ uv run uvicorn app.main:app --reload
 
 Open <http://127.0.0.1:8000>.
 
+AI assistants can use the same scanner locally through the stdio MCP server. See
+[`docs/MCP.md`](docs/MCP.md) for Claude Code, Codex CLI, Cursor and generic client setup, tool schemas, path
+restrictions and interpretation limits.
+
 With the `ml` extra installed, both detector models load in the background at startup (`/api/health` reports
 `"model": "loading"`, then `"loaded"`, or `"degraded"` if one of the two models failed to load and the other
 runs). On first use they download about 840 MB of weights from the Hugging Face

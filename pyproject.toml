@@ -18,6 +18,22 @@ ml = [
     "torch>=2.15.0",
     "transformers>=5.22.1",
 ]
+mcp = [
+    "mcp>=1.0",
+]
+
+[project.scripts]
+banthefake-mcp = "app.mcp_server:main"
+
+[build-system]
+requires = ["setuptools>=84"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["templates/*", "trust/*"]
 
 [dependency-groups]
 dev = [
