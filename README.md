@@ -347,16 +347,23 @@ Fly.io, plus backups, updates and a pre-launch checklist), see [`docs/DEPLOY.md`
 
 ### Docker
 
+The published `linux/amd64` image includes both detector models and runs without network access. Start v1.0.0
+with a persistent volume:
+
 ```bash
-docker build -t banthefake .
 docker run -d --name banthefake -p 8000:8000 \
   -v banthefake-data:/data \
   -e BTF_ADMIN_TOKEN='replace-with-at-least-24-random-characters' \
   -e BTF_PRIVACY_CONTACT='privacy@your-domain.org' -e BTF_ENV=production \
   -e FORWARDED_ALLOW_IPS='10.0.0.2' \
-  banthefake
+  ghcr.io/anmolsrivastavadev-pixel/banthefake:1.0.0
 curl http://127.0.0.1:8000/api/health
 ```
+
+Release images are also tagged `v1.0.0`, `1.0` and `latest`; use an immutable full-version tag in production.
+The release workflow publishes amd64 only because cross-building Torch and loading both models for Arm under
+QEMU is expensive and fragile. The Dockerfile and its base images support `linux/arm64`, so an Arm host can
+build the image natively with `docker build -t banthefake .`.
 
 The image works like this:
 
