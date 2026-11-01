@@ -43,6 +43,24 @@ The host's swap absorbs brief pressure outside the container, but sustained swap
 the 8 GB profile. For concurrency 2, use an 8 GB host, set `BTF_SCAN_CONCURRENCY=2`, and raise Compose
 `mem_limit` to `5g` (2.5 + 2 × 1 + 0.5 GiB). On Fly, set the Machine memory to `8gb` with concurrency 2.
 
+## Run the published image
+
+Each release publishes an amd64 image with both detector models baked in. This example runs v1.0.0 directly;
+put a TLS reverse proxy in front of it before exposing it publicly:
+
+```bash
+docker run -d --name banthefake -p 127.0.0.1:8000:8000 \
+  -v banthefake-data:/data \
+  -e BTF_ADMIN_TOKEN='replace-with-at-least-24-random-characters' \
+  -e BTF_PRIVACY_CONTACT='privacy@your-domain.org' \
+  -e BTF_ENV=production \
+  ghcr.io/anmolsrivastavadev-pixel/banthefake:1.0.0
+```
+
+The same release also has `v1.0.0`, `1.0` and `latest` tags. Pin the full version in production. Release
+automation does not cross-build Arm: installing CPU Torch and loading both detectors under QEMU makes that
+build slow and fragile. The Dockerfile supports Arm, and an Arm server can build it natively.
+
 ## Hosting options compared
 
 Prices were read on **2026-10-31** from the providers' pricing pages (sources at the end of this file).
@@ -89,8 +107,9 @@ Notes:
   the cheapest robust option that is available today: 4 GB of RAM with no CPU throttling, EU hosting for EU
   petition data, 20 TB of traffic, automatic HTTPS, and the whole setup in two files you control. If the
   Cost-Optimized CX23 (€5.99) or the Arm CAX11 (€6.49) becomes available again, the same config works there.
-  The image is built for both amd64 and arm64. For a US audience, use the same config on a DigitalOcean
-  Droplet ($24, or $28.80 with backups).
+  The Dockerfile builds natively on amd64 and arm64; the published release image is amd64 only, so build from
+  source on CAX11. For a US audience, use the same config on a DigitalOcean Droplet ($24, or $28.80 with
+  backups).
 - **Alternative: Fly.io, `shared-cpu-2x` with 4 GB (Option B), about $26/month.** Choose this if you do not
   want to maintain a server (OS updates, firewall, Docker). It has managed TLS and certificates, a
   one-command deploy and volume snapshots. The trade-offs are shared-CPU throttling under sustained load and
@@ -130,7 +149,7 @@ This is Option A with the host preparation automated. Read Option A once for how
 1. **Create the server with the cloud-init file.** Copy
    [`deploy/hetzner/cloud-init.yaml`](../deploy/hetzner/cloud-init.yaml) and edit the two `REPLACE-ME`
    values: your SSH public key (for the `deploy` user) and `BTF_REF`, the release tag or commit to check out
-   (for example `v1.0.0`, see [Releases](#releases-manual-tagging)). In the Hetzner Console, create a server
+   (for example `v1.0.0`, see [Releases](#releases)). In the Hetzner Console, create a server
    as in [A1](#a1-create-the-server) (CPX22, Ubuntu 24.04, IPv4 + IPv6, backups on, the Cloud Firewall) and
    paste the file into **Cloud config**. Point DNS at it ([A2](#a2-dns)).
 
@@ -188,6 +207,31 @@ This is Option A with the host preparation automated. Read Option A once for how
 
 The first build takes roughly 10 to 20 minutes. Afterwards, do [A6](#a6-verify-client-ip-handling) and the
 [pre-launch checklist](#pre-launch-checklist). Prefer deploying tags or commits that passed CI over `main`.
+
+To make `deploy.sh` use a published image instead of building it, create this untracked Compose override in
+`deploy/hetzner/published-image.yml`:
+
+```yaml
+services:
+  app:
+    image: ghcr.io/anmolsrivastavadev-pixel/banthefake:${BTF_IMAGE_TAG:-1.0.0}
+    build: !reset null
+    pull_policy: always
+```
+
+Then run the normal deployment with the matching source tag and image version:
+
+```bash
+cd /opt/banthefake/deploy/hetzner
+export BTF_IMAGE_TAG=1.0.0
+export COMPOSE_FILE="$PWD/docker-compose.yml:$PWD/published-image.yml"
+./deploy.sh v1.0.0
+```
+
+The override removes the local build definition and makes Compose pull the release image. Keep
+`COMPOSE_FILE` set on later `deploy.sh` runs so its configuration hash and health/rollback checks continue to
+describe the same stack. This requires a current Docker Compose plugin with support for the `!reset` override
+tag; the cloud-init path installs the current plugin from Docker's apt repository.
 
 Not verified here: the cloud-init file was checked against cloud-init's published JSON schema and its
 provisioning script with `shellcheck`, but it has not been booted on a real server from this repository.
@@ -558,7 +602,7 @@ otherwise on a regular schedule. Check the new token with an export
       HTTP redirecting to HTTPS. `BTF_DOMAIN` (Option A) or `fly certs` (Option B) uses the real name, and no
       `example.org` or `CHANGE-ME` values are left.
 - [ ] **CI green on the exact commit you deploy:** `gh run list --branch main --limit 5`, or the Actions tab.
-      All three jobs (`test`, `test-ml`, `docker`) pass. The `docker` job is the same image smoke test that
+      All four jobs (`test`, `e2e`, `test-ml`, `docker`) pass. The `docker` job is the same image smoke test that
       production depends on.
 - [ ] **`BTF_ADMIN_TOKEN`** is at least 24 random characters, stored in a password manager, and works for an
       export. With a short or missing token, admin endpoints return 404 and GDPR erasure is impossible.
@@ -578,24 +622,27 @@ otherwise on a regular schedule. Check the new token with an export
 - [ ] **Firewall** (Option A): only 22, 80 and 443 (TCP and UDP) are open, and port 8000 is not reachable from
       outside (`curl http://SERVER_IP:8000` from your machine must fail).
 
-## Releases (manual tagging)
+## Releases
 
-There is no release automation: a release is an annotated git tag on a commit whose CI run is green.
-To cut `v1.0.0` (not created yet):
+Pushing a `vMAJOR.MINOR.PATCH` tag starts the release workflow. It reruns the complete CI workflow, publishes
+the amd64 image to `ghcr.io/anmolsrivastavadev-pixel/banthefake` with full-version, major/minor and `latest`
+tags, attaches SBOM and provenance attestations, and creates a GitHub Release from that version's
+`CHANGELOG.md` section. To cut `v1.0.0`:
 
 ```bash
 git checkout main && git pull --ff-only
 git status                                  # clean
-gh run list --branch main --limit 5         # test, test-ml and docker all green for this exact commit
+gh run list --branch main --limit 5         # test, e2e, test-ml and docker all green for this exact commit
 git log -1 --format='%H %s'                 # the commit you are tagging
 git tag -a v1.0.0 -m "BanTheFake v1.0.0"    # add -s to sign it if you have a signing key set up
-git push origin v1.0.0
+git push origin v1.0.0                       # starts CI, image publication and GitHub Release creation
 ```
 
 Then deploy it with `./deploy.sh v1.0.0` (or set `BTF_REF=v1.0.0` in `cloud-init.yaml` for a new server).
 Tags are immutable by convention: never move or re-push a published tag; fix forward with `v1.0.1`. Use
-`vMAJOR.MINOR.PATCH`. Optionally write release notes on GitHub (`gh release create v1.0.0 --notes ...`).
-If a release is bad, roll back by deploying the previous tag: `./deploy.sh <previous-tag>`.
+`vMAJOR.MINOR.PATCH`, and add the matching changelog section before tagging. A manual workflow run must be
+started from a tag and applies the same validation. If a release is bad, roll back by deploying the previous
+tag: `./deploy.sh <previous-tag>`.
 
 ## Sources (read 2026-10-31)
 
