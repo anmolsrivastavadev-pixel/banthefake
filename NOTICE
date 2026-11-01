@@ -1,0 +1,12 @@
+BanTheFake
+Copyright 2026 Anmol Srivastava and BanTheFake contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party components keep their own licences:
+- AI detector weights are downloaded at runtime and are not part of this repository:
+  haywoodsloan/ai-image-detector-deploy (Apache-2.0) and
+  buildborderless/CommunityForensics-DeepfakeDet-ViT (MIT).
+- The C2PA trust lists in app/trust/ are published by the C2PA (https://c2pa.org/conformance).
+- Test images in tests/fixtures/ are licensed individually; see tests/fixtures/ATTRIBUTION.md.
+- Python and JavaScript dependencies are licensed under their own terms.

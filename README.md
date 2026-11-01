@@ -436,6 +436,13 @@ Please report suspected vulnerabilities privately through GitHub Security Adviso
 [`SECURITY.md`](SECURITY.md) for scope, safe-testing rules, and response expectations; do not open a public
 vulnerability issue.
 
+## Licence
+
+BanTheFake is open source under the [Apache License 2.0](LICENSE): you may use, modify and distribute it,
+including commercially and inside other products, as long as you keep the licence and [NOTICE](NOTICE).
+The AI detector weights, the C2PA trust lists and the test images keep their own licences — see
+[NOTICE](NOTICE) and [tests/fixtures/ATTRIBUTION.md](tests/fixtures/ATTRIBUTION.md).
+
 ## Running tests
 
 ```bash
