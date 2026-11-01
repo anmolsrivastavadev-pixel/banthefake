@@ -104,25 +104,10 @@ Plan:
 - Decision: ship / ship as experimental (off by default, never drives the verdict) / don't ship,
   based on measured FPR on real faces.
 
-Status: researched; **do not ship** (2026-10-31). OpenCV YuNet is a suitable MIT-licensed CPU face cropper.
-GenD is the only technically credible detector candidate found: its code and 1.2 GB CLIP-L/14 checkpoint are
-labelled MIT, but it was trained on FaceForensics++, whose source-data terms are noncommercial research only.
-The authors need to confirm commercial checkpoint rights. It also has no published CPU latency and is likely
-too heavy for this synchronous CPU service. The established evaluation sets are agreement-gated,
-noncommercial/academic-only, or have no usable licence; repacks cannot relicense those sources. Without a
-source-audited open benchmark, the app cannot measure a production false-positive rate honestly.
-
-The experiment may resume only after the checkpoint rights and dataset gates are cleared. Then benchmark
-YuNet + GenD with identity/source-disjoint train, calibration and locked test groups, at least 500 real and
-500 manipulated samples spanning three unseen methods, compression/resize/blur/pose/face-size slices, and a
-2-vCPU latency/RSS test. Required gates: <=2% real-face FPR with a reported 95% interval, >=80% overall recall,
->=65% for each manipulation method, image p95 <3 s, eight-frame video p95 <15 s, and added RSS <1.5 GB. If all
-pass, it begins as an opt-in experimental signal that never decides the verdict by itself.
-
-Measured (2026-10-31, `docs/FACESWAP-EVAL.md`): real-face FPR *can* be measured with freely licensed Commons
-portraits, so the benchmark was run with 550 real faces (267 source groups) and 640 swaps between synthetic
-faces made with four classical methods. YuNet + GenD CLIP-L/14 failed the gates: test FPR 1.17% (Wilson 95%
-upper 3.39%; 4.3% on half-size images), overall recall 67.7% (morph 48.8%), 0/8 frames of a real public deepfake
-PSA flagged, added RSS 1.62 GB. Latency passed. **Still do not ship, not even opt-in.** Reopen if the GenD
-authors confirm commercial rights, a larger real-face set (>1000, incl. phone/recompressed) and a licence-clean
-set of modern face swaps become available, or a quantised model clears the RSS gate.
+Status: researched and benchmarked twice; **still do not ship** (2026-10-31). The first benchmark evaluated
+YuNet with the externally trained GenD CLIP-L/14 checkpoint and failed the FPR-interval, degraded-image FPR,
+overall-recall, morph-recall and memory gates, while its FaceForensics++ training data also left commercial
+checkpoint rights unresolved. The second benchmark trained a licence-clean CLIP ViT-B/16 detector on
+self-blended Commons faces; selected R3 passed FPR, latency and memory gates but achieved only 35.9% overall
+recall and failed the recall gate for every swap method. Full methods, results and the Round 4 plan are in
+`docs/FACESWAP-EVAL.md`.

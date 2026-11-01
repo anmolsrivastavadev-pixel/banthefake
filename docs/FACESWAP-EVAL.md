@@ -134,8 +134,8 @@ latency there. That should still fit the time gates, except possibly the 4-face 
 | ≥500 real / ≥500 manipulated, 3 unseen methods | 550 / 640 / 4 methods | met for the self-made set only |
 | Checkpoint rights | MIT label, trained on non-commercial FF++ | **unresolved** |
 
-**Decision: do not ship, not even as opt-in experimental.** We created no `app/scan/faceswap.py` and no
-test file. Even under the most favourable reading (the largest-face policy chosen after the fact, recall
+**Decision: do not ship, not even as opt-in experimental.** No detector was added to the app. Even under the
+most favourable reading (the largest-face policy chosen after the fact, recall
 measured on our own crude swaps), recall stays below 80% and morph recall below 65%. The test FPR interval
 cannot rule out roughly 3–4% of real photos being flagged, and degraded real images are worse. The only real
 public deepfake in reach was missed.
@@ -160,3 +160,33 @@ public deepfake in reach was missed.
 4. Re-evaluate in fp16/int8 to get under the RSS gate.
 
 Reproduction scripts and raw outputs: `research/faceswap/` (see `report.md` there; git-ignored).
+
+## Self-blended training with a licence-clean CLIP backbone (2026-10-31)
+
+The second attempt trained CLIP ViT-B/16, whose code and weights are MIT-licensed, using the backbone
+LayerNorms and a LayerNorm plus linear head. R3 also trained LoRA rank 8 adapters on the attention query and
+value projections. Training used self-blended images made from the same real Commons face as each source: it
+never blended in another person's face. The dataset contained 2,230 freely licensed real faces, with frozen
+train, calibration and test splits that were disjoint by source group and identity. The locked test contained
+640 swaps between synthetic faces, 160 each for morph, poisson, piecewise-affine alpha blending and
+Laplacian-pyramid blending.
+
+Criterion C was the recall on calibration self-blends at the threshold that kept every calibration real-image
+variant at or below 2% FPR. It was declared before training and used to select the checkpoint; locked-test FPR
+and swap recall did not affect selection.
+
+| Run | Test FPR (Wilson 95%) | Overall recall | Morph | Poisson | PWA alpha | Pyramid | Image / 8-frame p95 | Added RSS | Criterion C |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| R1 `sbi2_b16` | 1.0% (0.5–2.2%) | 71.7% | 31.3% | 86.9% | 88.8% | 80.0% | 0.301 / 0.628 s | 1,169 MB | 44.5% |
+| R2 `sbi3_b16` | 1.5% (0.8–2.9%) | 67.5% | 28.1% | 83.8% | 83.1% | 75.0% | 0.270 / 0.627 s | 1,136 MB | 42.6% |
+| **R3 `sbi2_b16_lora8`** | **0.3% (0.1–1.2%)** | **35.9%** | **5.6%** | **48.8%** | **49.4%** | **40.0%** | **0.264 / 0.632 s** | **1,131 MB** | **57.5%** |
+
+**Decision: DO NOT SHIP.** Selected R3 passed the real-face FPR gate (2/594, 0.3%; Wilson 95% 0.1–1.2%),
+the image and eight-frame video latency gates, and the added-RSS gate. It failed the ≥80% overall-recall gate
+at 35.9% and the ≥65% per-method gate for all four methods: morph 5.6%, poisson 48.8%, PWA alpha 49.4% and
+pyramid 40.0%.
+
+The pre-declared calibration criterion selected R3, but R3 was the worst run on the real-swap test. The LoRA
+run overfit to self-blend artifacts that did not transfer to held-out swaps. Future rounds must therefore select
+on a swap-based validation set that is disjoint from the confirmation set. Round 4 is being prepared with a
+fresh confirmation set that has never been used for training, calibration or model selection.
