@@ -106,17 +106,18 @@
   }
 
   /**
-   * The sampling loop, independent of the DOM. Grabs frame 0 at once, then one every `intervalMs` while
-   * `stillPlaying()` is true, up to `count` frames. `grab(i)` resolves to { frame } to keep it, { skip: true }
-   * to drop it (a blank fade, a repeated frame), or { stop: <code> } to end the capture with an error code.
-   * Returns { frames, stop, playbackStopped }.
+   * The sampling loop, independent of the DOM. Grabs frame 0 at once, then frame i at start + i * intervalMs
+   * (so encoding time does not stretch the schedule) while `stillPlaying()` is true, up to `count` frames.
+   * `grab(i)` resolves to { frame } to keep it, { skip: true } to drop it (a blank fade, a repeated frame), or
+   * { stop: <code> } to end the capture with an error code. Returns { frames, stop, playbackStopped }.
    */
-  async function sampleFrames({ count, intervalMs, grab, stillPlaying, sleep }) {
+  async function sampleFrames({ count, intervalMs, grab, stillPlaying, sleep, now = () => Date.now() }) {
     const frames = [];
     let playbackStopped = false;
+    const start = now();
     for (let i = 0; i < count; i++) {
       if (i > 0) {
-        await sleep(intervalMs);
+        await sleep(Math.max(0, start + i * intervalMs - now()));
         if (!stillPlaying()) {
           playbackStopped = true;
           break;
@@ -232,7 +233,7 @@
     };
 
     const stillPlaying = () => !video.paused && !video.ended && !full;
-    const result = await sampleFrames({ count, intervalMs: o.intervalMs, grab, stillPlaying, sleep });
+    const result = await sampleFrames({ count, intervalMs: o.intervalMs, grab, stillPlaying, sleep, now });
     if (result.stop) return { ok: false, error: result.stop, host };
     if (!result.frames.length) return { ok: false, error: 'protected', host };
     let spanS = 0;

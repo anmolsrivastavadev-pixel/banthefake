@@ -85,8 +85,19 @@ test('the sampler grabs at once, then once per interval, and stops when playback
   const sleep = async ms => sleeps.push(ms);
   const all = await C.sampleFrames({ count: 8, intervalMs: 1000, grab: async i => ({ frame: `f${i}` }), stillPlaying: () => true, sleep });
   assert.deepEqual(all.frames, ['f0', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7']);
-  assert.deepEqual(sleeps, Array(7).fill(1000));
+  assert.equal(sleeps.length, 7);
   assert.equal(all.playbackStopped, false);
+
+  // Frames are due at start + i * interval: time spent grabbing/encoding is taken off the next wait.
+  let clock = 0;
+  const waits = [];
+  await C.sampleFrames({
+    count: 4, intervalMs: 1000, stillPlaying: () => true, now: () => clock,
+    grab: async () => { clock += 250; return { frame: 'x' }; },
+    sleep: async ms => { waits.push(ms); clock += ms; },
+  });
+  assert.deepEqual(waits, [750, 750, 750]);
+  assert.equal(clock, 3250);
 
   let ticks = 0;
   const stopped = await C.sampleFrames({
