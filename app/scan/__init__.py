@@ -84,12 +84,13 @@ class ModelInfo(TypedDict):
 
 
 class FileInfo(TypedDict):
-    type: Literal["image", "video"]
+    type: Literal["image", "video", "video_frames"]
     mime: str
     size_bytes: int
     width: NotRequired[int]
     height: NotRequired[int]
     duration_s: NotRequired[float]
+    frames_checked: NotRequired[int]  # video_frames: captured frames that could be decoded
 
 
 class ScanReport(TypedDict):
@@ -466,6 +467,7 @@ def _c2pa_signals(out: _Collector, cred: c2pa_check.C2PAResult) -> None:
 def _run_model(
     out: _Collector, frames: list, kind: str, timestamps: list[float] | None = None,
     duration: float | None = None, low_colour: bool = False, deadline: float | None = None,
+    captured: bool = False,
 ) -> tuple[ModelInfo | None, str | None]:
     """Run the detectors. Returns (info, None), or (None, reason) when they ran but gave no result."""
     if not frames:
@@ -569,7 +571,7 @@ def _run_model(
         out.add("model", f"{our} found no strong AI signal ({score_text}){frames_note}. Detectors miss many fakes, so this does not mean it is real.", weight)
     if partial:
         out.add("info", partial, 0.2)
-    if kind == "video" and duration is None:
+    if kind == "video" and duration is None and not captured:
         out.add("info", "The video duration is unknown, so detector coverage may be partial.", 0.2)
     return info, None
 
@@ -711,3 +713,102 @@ def _verdict(
             f"The file has camera metadata. That is a good sign, but it can be faked or copied, and it does NOT mean the file is real. {NO_PROOF}",
         )
     return "unknown", "No conclusive signals found", f"That does NOT mean it is real. Many fakes have their metadata removed. {NO_PROOF}"
+
+
+# --- frames captured from a playing video by the browser extension (POST /api/scan-frames) ----------------------
+
+FRAME_MIMES = ("image/jpeg", "image/png", "image/webp")
+CAPTURED_FRAMES_TEXT = (
+    "{what} captured from a video playing in your browser, not read from the original file. Screen "
+    "capture and re-compression reduce the detector's reliability, and audio is not analysed. " + NO_PROOF
+)
+CAPTURED_METADATA_TEXT = (
+    "Metadata, content credentials (C2PA) and AI-generator markers were not checked: frames captured in the "
+    "browser carry none of the original video's metadata."
+)
+
+
+def scan_frames(
+    parts: list[tuple[Path, str]],
+    deadline: float | None = None,
+    cancellation: isolate.CancellationToken | None = None,
+) -> ScanReport:
+    """Scan an ordered sample of still frames captured from one video. `parts`: (path, server-sniffed mime).
+
+    Each frame goes through the same (isolated) image parser as an uploaded image; its metadata, C2PA and markers
+    are ignored, because a canvas capture has none of the original's. The frames are then decided per frame and
+    aggregated exactly like the frames sampled from an uploaded video.
+    """
+    if not parts:
+        raise UnsupportedMedia("No frames were received.")
+    deadline = deadline if deadline is not None else _DEADLINE_CONTEXT.get()
+    deadline = deadline if deadline is not None else isolate.deadline_after_timeout()
+    cancellation = cancellation or _CANCELLATION_CONTEXT.get() or isolate.CancellationToken()
+    want_frames = model.enabled()
+    isolated = isolate.enabled() and not _parser_instrumented()
+    frames: list[Image.Image] = []
+    low: list[bool] = []
+    decoded = 0
+    width = height = None
+    size = 0
+    for index, (path, mime) in enumerate(parts):
+        if mime not in FRAME_MIMES:
+            raise UnsupportedMedia("Captured frames must be JPEG, PNG or WebP images.")
+        isolate.check_deadline(deadline)
+        size += os.path.getsize(path)
+        try:
+            if isolated:
+                parsed = isolate.parse(path, f"frame-{index:02d}", mime, want_frames,
+                                       deadline=deadline, cancellation=cancellation)
+            else:
+                parsed = _parse_hostile(path, mime, want_frames)
+                isolate.check_deadline(deadline)
+        except isolate.WorkerUnsupportedMedia as exc:
+            raise UnsupportedMedia(str(exc)) from exc
+        if parsed["kind"] != "image" or parsed["image_error"] or (want_frames and not parsed["frames"]):
+            continue  # undecodable frame: skipped and counted below
+        decoded += 1
+        if width is None and parsed["width"] and parsed["height"]:
+            width, height = parsed["width"], parsed["height"]
+        for image in _images(parsed["frames"], deadline):
+            # The same long-side limit as frames sampled from an uploaded video; keeps 16 frames small in memory.
+            image.thumbnail((video.MAX_FRAME_SIDE, video.MAX_FRAME_SIDE))
+            frames.append(image)
+        low.append(parsed["low_colour"])
+    if decoded == 0:
+        raise UnsupportedMedia("None of the captured frames could be decoded.")
+
+    mimes = {mime for _, mime in parts}
+    file_info: FileInfo = {
+        "type": "video_frames", "mime": mimes.pop() if len(mimes) == 1 else "image/*", "size_bytes": size,
+        "frames_checked": decoded,
+    }
+    if width and height:
+        file_info["width"], file_info["height"] = width, height
+    out = _Collector()
+    what = "This frame was" if decoded == 1 else f"These {decoded} frames were"
+    out.add("info", CAPTURED_FRAMES_TEXT.format(what=what), 0.2)
+    out.add("info", CAPTURED_METADATA_TEXT, 0.1)
+    if decoded < len(parts):
+        out.add("info", f"{len(parts) - decoded} of {len(parts)} captured frames could not be decoded and were "
+                        "skipped.", 0.1)
+    low_colour = bool(low) and all(low)
+    if low_colour:
+        out.add("info", "The AI detector is unreliable on black-and-white or low-colour images.", 0.1)
+    model_info, model_failure = _run_model(
+        out, frames, "video", None, None, low_colour, deadline=deadline, captured=True
+    )
+    detector_failed = model.enabled() and model_info is None
+    if detector_failed:
+        reason = model_failure or "the captured frames could not be decoded"
+        out.add("info", f"AI detector could not analyze these frames ({reason}).", 0.2)
+    verdict, title, detail = _verdict(out, None, model_info, detector_failed, low_colour)
+    return {
+        "verdict": verdict,
+        "verdict_title": title,
+        "verdict_detail": detail,
+        "signals": out.signals,
+        "c2pa": None,
+        "model": model_info,
+        "file": file_info,
+    }

@@ -1,5 +1,5 @@
 // Result window: shows one scan job from storage.session. Builds DOM nodes with text only, never HTML strings.
-import { describeError, describeReport, helpUrl } from './lib.js';
+import { describeError, describeReport, describeVideoCheck, helpUrl } from './lib.js';
 
 const api = globalThis.browser ?? globalThis.chrome;
 const id = location.hash.slice(1);
@@ -26,21 +26,40 @@ function setVerdict(cls, title, ...lines) {
   statusEl.textContent = [title, ...lines].filter(Boolean).map(t => (/[.!?…]$/.test(t) ? t : `${t}.`)).join(' ');
 }
 
+function section(title, rows, notes) {
+  const dl = el('dl');
+  for (const [k, v] of rows) dl.append(el('dt', {}, k), el('dd', {}, v));
+  return el('section', { class: 'block' }, el('h2', {}, title), dl, ...notes.map(n => el('p', { class: 'note' }, n)));
+}
+
 function render(job) {
+  const video = job.kind === 'video';
   if (job.server) {
     helpEl.href = helpUrl(job.server);
-    privacyEl.textContent = `Images are sent only to ${new URL(job.server).host} (your configured server), and only when you `
-      + 'choose "Check with BanTheFake". The extension sends nothing else and collects no analytics.';
+    privacyEl.textContent = video
+      ? `Captured frames are sent only to ${new URL(job.server).host} (your configured server), and only when you choose `
+        + '"Check this video with BanTheFake". The page address, audio and anything else are not sent. No analytics.'
+      : `Images are sent only to ${new URL(job.server).host} (your configured server), and only when you `
+        + 'choose "Check with BanTheFake". The extension sends nothing else and collects no analytics.';
   }
   if (!job.server) helpEl.hidden = true;
   signalsEl.replaceChildren();
   sectionsEl.replaceChildren();
+  if (job.status === 'capturing') {
+    setVerdict('loading', 'Capturing frames…', 'Keep the video playing: up to 8 frames are copied over about 8 seconds.',
+      job.pageHost ? `Video on ${job.pageHost}` : '');
+    return;
+  }
   if (job.status === 'loading') {
+    if (video) {
+      setVerdict('loading', 'Scanning…', describeVideoCheck(job.capture, job.pageHost).summary);
+      return;
+    }
     setVerdict('loading', 'Scanning…', job.imageHost ? `Image from ${job.imageHost}` : '');
     return;
   }
   if (job.status === 'error') {
-    const { title, detail } = describeError(job.code, job.message);
+    const { title, detail } = describeError(job.code, job.message, video ? 'video' : 'image');
     setVerdict('caution', title, detail);
     return;
   }
@@ -52,11 +71,11 @@ function render(job) {
   }
   setVerdict(view.cls, view.title, view.detail, view.caveat);
   signalsEl.replaceChildren(...view.signals.map(s => el('li', {}, el('span', { class: `tag ${s.tag}` }, s.label), el('span', {}, s.text))));
-  for (const section of view.sections) {
-    const dl = el('dl');
-    for (const [k, v] of section.rows) dl.append(el('dt', {}, k), el('dd', {}, v));
-    sectionsEl.append(el('section', { class: 'block' }, el('h2', {}, section.title), dl, el('p', { class: 'note' }, section.note)));
+  if (video) {
+    const check = describeVideoCheck(job.capture, job.pageHost);
+    sectionsEl.append(section('Video check', check.rows, check.notes));
   }
+  for (const s of view.sections) sectionsEl.append(section(s.title, s.rows, [s.note]));
 }
 
 let seen = false;
@@ -70,7 +89,7 @@ async function load() {
   }
   // The job may still be on its way from the background worker; only give up after a moment.
   setTimeout(() => {
-    if (!seen) setVerdict('caution', 'Result not available', 'This result has expired. Right-click the image and choose "Check with BanTheFake" again.');
+    if (!seen) setVerdict('caution', 'Result not available', 'This result has expired. Right-click the image or video and check it again.');
   }, 3000);
 }
 

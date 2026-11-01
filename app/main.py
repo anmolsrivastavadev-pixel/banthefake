@@ -5,6 +5,7 @@ import ipaddress
 import json
 import logging
 import os
+import shutil
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -30,7 +31,7 @@ from app.config import (
 from app.petition import PetitionStore, ValidationError, validate
 from app.ratelimit import RateLimiter
 from app.sniff import sniff
-from app.upload import UploadError, receive_file
+from app.upload import UploadError, receive_file, receive_parts
 
 log = logging.getLogger("banthefake")
 
@@ -58,6 +59,11 @@ SECURITY_HEADERS = {
 
 
 MAX_JSON_BODY = 16 * 1024  # petition / erase request bodies
+# POST /api/scan-frames: frames captured from a playing video by the browser extension (which sends at most 8
+# frames and about 12 MB). The total is also capped by BTF_MAX_UPLOAD_MB.
+MAX_FRAMES = 16
+MAX_FRAME_BYTES = 4 * 1024 * 1024
+MAX_FRAMES_TOTAL_BYTES = 16 * 1024 * 1024
 PRIVACY_TEMPLATE = Path(__file__).resolve().parent / "templates" / "privacy.html"
 CONTACT_NOT_CONFIGURED = (
     '<p class="config-warning" role="note"><strong>Contact not configured.</strong> '
@@ -121,7 +127,7 @@ class SecurityHeadersMiddleware:
 
 # The only cross-origin surface: the scanner and the health check (used by the browser extension's
 # "test connection"). Petition and admin endpoints never get CORS headers.
-CORS_METHODS = {"/api/scan": "POST", "/api/health": "GET"}
+CORS_METHODS = {"/api/scan": "POST", "/api/scan-frames": "POST", "/api/health": "GET"}
 CORS_MAX_AGE = "600"
 
 
@@ -393,6 +399,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return error(404, "not_found")
         return {"deleted": True}
 
+    async def run_scan_in_slot(cancellation, func, *args):
+        """Run a scanner in the threadpool under a scan slot and a fresh hard deadline; 503 if no slot frees up."""
+        # Decoding media and running the model is memory hungry: bound how many run at once.
+        if not await scan_slots.acquire(settings.scan_wait_s):
+            return error(503, "busy", {"Retry-After": "30"})
+        deadline = scan.isolate.deadline_after_timeout()
+        context_tokens = scan._set_request_context(deadline, cancellation)
+        try:
+            # Context variables propagate into AnyIO's worker thread while preserving the public
+            # three-argument scanner interface used by embedders and deterministic test doubles.
+            return await run_in_threadpool(func, *args)
+        except asyncio.CancelledError:
+            cancellation.cancel()
+            raise
+        finally:
+            scan._reset_request_context(context_tokens)
+            scan_slots.release()
+
     @app.post("/api/scan")
     async def scan_upload(request: Request):
         cancellation = scan.isolate.CancellationToken()
@@ -417,22 +441,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 return error(415, "Unsupported file type. Upload a JPG, PNG, WEBP, GIF, MP4, MOV or WEBM.")
             _, mime = sniffed
             filename = os.path.basename(info.filename.replace("\\", "/"))[:255]
-            # Decoding media and running the model is memory hungry: bound how many run at once.
-            if not await scan_slots.acquire(settings.scan_wait_s):
-                return error(503, "busy", {"Retry-After": "30"})
-            deadline = scan.isolate.deadline_after_timeout()
-            context_tokens = scan._set_request_context(deadline, cancellation)
-            try:
-                # Context variables propagate into AnyIO's worker thread while preserving the public
-                # three-argument scanner interface used by embedders and deterministic test doubles.
-                report = await run_in_threadpool(scan.scan_file, tmp_path, filename, mime)
-            except asyncio.CancelledError:
-                cancellation.cancel()
-                raise
-            finally:
-                scan._reset_request_context(context_tokens)
-                scan_slots.release()
-            return report
+            return await run_scan_in_slot(cancellation, scan.scan_file, tmp_path, filename, mime)
         except UploadError as exc:
             return error(exc.status, exc.message)
         except ClientDisconnect:
@@ -451,6 +460,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return error(500, "Scan failed.")
         finally:
             tmp_path.unlink(missing_ok=True)
+
+    @app.post("/api/scan-frames")
+    async def scan_frames_upload(request: Request):
+        """Frames the browser extension captured from a video the user is playing, as an ordered sample.
+
+        The server never downloads the video (or anything else) itself: it only scans the uploaded still frames.
+        """
+        cancellation = scan.isolate.CancellationToken()
+        if not scan_limiter.hit(client_ip(request)):
+            return error(429, "Too many scans. Please wait a minute and try again.")
+        tmp_dir = Path(tempfile.mkdtemp(prefix="btf-frames-"))
+        try:
+            try:
+                received = await asyncio.wait_for(
+                    receive_parts(request, tmp_dir, "frames", MAX_FRAMES, MAX_FRAME_BYTES,
+                                  min(MAX_FRAMES_TOTAL_BYTES, settings.max_upload_bytes)),
+                    timeout=settings.upload_timeout_s,
+                )
+            except TimeoutError:
+                return error(408, "upload_timeout")
+            parts = []
+            for part in received:
+                with part.path.open("rb") as f:
+                    sniffed = sniff(f.read(64))
+                if sniffed is None or sniffed[1] not in scan.FRAME_MIMES:
+                    return error(415, "Unsupported frame type. Captured frames must be JPEG, PNG or WEBP images.")
+                parts.append((part.path, sniffed[1]))
+            return await run_scan_in_slot(cancellation, scan.scan_frames, parts)
+        except UploadError as exc:
+            return error(exc.status, exc.message)
+        except ClientDisconnect:
+            log.info("frame upload interrupted by client disconnect")
+            return error(400, "The upload was interrupted.")
+        except scan.UnsupportedMedia as exc:
+            return error(415, str(exc))
+        except scan.ScanTimeout:
+            return error(504, "scan_timeout")
+        except scan.ScanFailed:
+            log.exception("isolated scan worker failed")
+            return error(500, "scan_failed")
+        except Exception:
+            log.exception("frame scan failed")
+            return error(500, "Scan failed.")
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     @app.api_route("/privacy.html", methods=["GET", "HEAD"], response_class=HTMLResponse)
     async def privacy() -> HTMLResponse:

@@ -61,7 +61,8 @@ All JSON. Errors: `{"error": "<message>"}` with proper status code.
     "signer": str, "signed_at": str, "capture": bool, "ai_generated": bool, "actions": [...],
     "edits": [...], "ingredients": [...], "trust_list_version": str},
   "model": null | {"name": str, "ai_probability": float, "frames_checked": int},
-  "file": {"type": "image|video", "mime": str, "size_bytes": int, "width": int?, "height": int?}
+  "file": {"type": "image|video|video_frames", "mime": str, "size_bytes": int, "width": int?, "height": int?,
+    "frames_checked": int?}
 }
 ```
 - Verdict rules: a fully valid, officially trusted C2PA camera-capture claim → `verified_capture`; a fully
@@ -69,6 +70,22 @@ All JSON. Errors: `{"error": "<message>"}` with proper status code.
   Otherwise C2PA or IPTC says AI, or generator markers → `ai`. Model probability ≥ 0.85 → `ai` with
   wording "likely". Editing software only → `edited`. Camera EXIF and nothing else → `camera`. Else `unknown`.
   Capture copy states that provenance does not prove the depicted scene itself is real.
+
+### `POST /api/scan-frames` (multipart, 1–16 parts named `frames`)
+- For the browser extension's video check: still frames captured in the user's browser from a `<video>` they are
+  playing, in playback order. The server never fetches videos or URLs (no platform downloading, no SSRF surface).
+- Each part must sniff as JPEG, PNG or WEBP → 415 otherwise. At most 16 parts, 4 MB per part and 16 MB in total
+  (also ≤ `BTF_MAX_UPLOAD_MB`) → 413, enforced while streaming. Parts are written to a per-request temp directory
+  that is always deleted.
+- Same rate limit (shares `BTF_SCAN_RATE` with `/api/scan`), CORS opt-in list, scan slot, `BTF_SCAN_WAIT_S`,
+  hard deadline and isolated parsing as `/api/scan` (one parser job per frame within one deadline).
+- Frame metadata, C2PA and markers are ignored (stated in a signal). Frames are downscaled to 1024 px like sampled
+  video frames, decided per frame and aggregated with the video rule (majority of the most suspicious half; any
+  "likely" frame → at least "possible"). Undecodable frames are skipped and reported; none decodable → 415.
+- Response: the normal scan report with `c2pa: null` and `file: {"type": "video_frames", "mime", "size_bytes",
+  "frames_checked", "width"?, "height"?}`, plus an `info` signal: frames were captured from a playing video in the
+  browser; screen capture and re-compression reduce detector reliability; audio is not analysed; "No tool can
+  prove a file is real."
 
 ### Petition
 - `POST /api/petition` `{name, email, location?, consent: true, website?}`
@@ -87,7 +104,7 @@ All JSON. Errors: `{"error": "<message>"}` with proper status code.
 - Security headers on all responses: CSP (self + Google Fonts), X-Content-Type-Options, Referrer-Policy,
   X-Frame-Options DENY.
 - CORS is off by default. `BTF_CORS_ORIGINS` (exact origins, comma-separated) lets those origins read
-  `POST /api/scan` and `GET /api/health` (incl. preflight); no credentials, no other routes. Used by the
+  `POST /api/scan`, `POST /api/scan-frames` and `GET /api/health` (incl. preflight); no credentials, no other routes. Used by the
   browser extension (`extension/`, `docs/EXTENSION.md`) when it has no host permission for the server.
 
 ## Frontend changes

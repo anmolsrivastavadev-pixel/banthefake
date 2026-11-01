@@ -275,3 +275,6 @@ test('extension pages load no remote code and use no inline scripts or handlers'
     assert.doesNotMatch(src, /src="https?:|import\s*\(|\beval\(|new Function|innerHTML|insertAdjacentHTML|document\.write/, `${f}: remote or dynamic code`);
   }
 });
+
+// Video-check tests live in their own file; `node --test extension/` only loads this one (package.json "main").
+import './video.test.js';
