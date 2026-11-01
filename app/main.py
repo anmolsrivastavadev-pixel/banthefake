@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
-from starlette.datastructures import MutableHeaders
+from starlette.datastructures import Headers, MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -119,13 +119,65 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_headers)
 
 
+# The only cross-origin surface: the scanner and the health check (used by the browser extension's
+# "test connection"). Petition and admin endpoints never get CORS headers.
+CORS_METHODS = {"/api/scan": "POST", "/api/health": "GET"}
+CORS_MAX_AGE = "600"
+
+
+class CORSMiddleware:
+    """Minimal, opt-in CORS for an exact list of origins (BTF_CORS_ORIGINS) on CORS_METHODS paths only.
+
+    Not installed at all when the list is empty. Requests from other origins, to other paths or with other
+    methods pass through unchanged. Only CORS-safelisted request headers are allowed (a multipart POST needs
+    none) and credentials are never allowed.
+    """
+
+    def __init__(self, app: ASGIApp, origins: tuple[str, ...]) -> None:
+        self.app = app
+        self.origins = frozenset(origins)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        method = CORS_METHODS.get(scope.get("path", "")) if scope["type"] == "http" else None
+        if method is None:
+            await self.app(scope, receive, send)
+            return
+        request_headers = Headers(scope=scope)
+        origin = request_headers.get("origin")
+        allowed = origin is not None and origin in self.origins
+        if allowed and scope["method"] == "OPTIONS" and request_headers.get("access-control-request-method") == method:
+            preflight = Response(status_code=204, headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": method,
+                "Access-Control-Max-Age": CORS_MAX_AGE,
+                "Vary": "Origin",
+            })
+            await preflight(scope, receive, send)
+            return
+
+        async def send_with_cors(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers.add_vary_header("Origin")
+                if allowed and scope["method"] == method:
+                    headers["Access-Control-Allow-Origin"] = origin
+            await send(message)
+
+        await self.app(scope, receive, send_with_cors)
+
+
 class App(FastAPI):
-    def __init__(self, *args, hsts: bool = False, **kwargs) -> None:
+    def __init__(self, *args, hsts: bool = False, cors_origins: tuple[str, ...] = (), **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.hsts = hsts
+        self.cors_origins = cors_origins
 
     def build_middleware_stack(self) -> ASGIApp:
-        return SecurityHeadersMiddleware(super().build_middleware_stack(), hsts=self.hsts)
+        stack = super().build_middleware_stack()
+        if self.cors_origins:
+            # Outside ServerErrorMiddleware, like the security headers, so error responses stay readable.
+            stack = CORSMiddleware(stack, self.cors_origins)
+        return SecurityHeadersMiddleware(stack, hsts=self.hsts)
 
 
 def error(status: int, message: str, headers: dict[str, str] | None = None) -> JSONResponse:
@@ -213,7 +265,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = App(
         title="BanTheFake", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan,
-        hsts=settings.hsts,
+        hsts=settings.hsts, cors_origins=settings.cors_origins,
     )
     app.state.settings = settings
     app.state.store = store

@@ -112,6 +112,39 @@ def _admin_token() -> str | None:
     return token
 
 
+# Exact origins only: scheme://host[:port], no path, no wildcard. Extension origins are allowed so an operator can
+# let a published browser extension read /api/scan responses without granting it a host permission.
+CORS_SCHEMES = ("https", "http", "chrome-extension", "moz-extension")
+_CORS_ORIGIN_RE = re.compile(
+    r"(?P<scheme>[a-z][a-z-]*)://(?P<host>[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])"
+    r"(?::(?P<port>[0-9]{1,5}))?"
+)
+
+
+def validate_cors_origin(raw: str) -> str:
+    """Return the origin unchanged if it is one exact origin, else raise ConfigError."""
+    match = _CORS_ORIGIN_RE.fullmatch(raw)
+    port = match and match["port"]
+    if (
+        not match
+        or raw != raw.lower()  # browsers send lowercase origins and the comparison is exact
+        or ".." in match["host"]
+        or match["scheme"] not in CORS_SCHEMES
+        or (port is not None and not 1 <= int(port) <= 65535)
+        or (match["scheme"].endswith("-extension") and port is not None)
+    ):
+        raise ConfigError(
+            f"BTF_CORS_ORIGINS entries must be exact origins such as https://example.org or "
+            f"chrome-extension://<extension id> (lowercase, no path, trailing slash or wildcard); got {raw!r}."
+        )
+    return raw
+
+
+def _cors_origins() -> tuple[str, ...]:
+    raw = os.environ.get("BTF_CORS_ORIGINS", "")
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
+
+
 def _int(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     return int(raw) if raw else default
@@ -141,6 +174,7 @@ class Settings:
     admin_fail_rate: int = 10  # failed admin authentications per hour per IP
     client_ip_header: str | None = None  # operator-trusted header containing one IP address
     hsts: bool = False
+    cors_origins: tuple[str, ...] = ()  # BTF_CORS_ORIGINS; empty = no CORS headers at all (the default)
     model: str = "auto"
     env: str = "development"  # BTF_ENV; "production" refuses to start without a real privacy contact
     privacy_contact: str | None = None  # BTF_PRIVACY_CONTACT; validated by check()
@@ -160,6 +194,8 @@ class Settings:
             raise ConfigError(f"BTF_ENV must be one of: {', '.join(ENVIRONMENTS)} (got {self.env!r}).")
         if self.privacy_contact is not None:
             validate_privacy_contact(self.privacy_contact)
+        for origin in self.cors_origins:
+            validate_cors_origin(origin)
         if self.production and is_placeholder_contact(self.privacy_contact):
             raise ConfigError(
                 "BTF_ENV=production but BTF_PRIVACY_CONTACT is unset or a placeholder. Set it to a real, "
@@ -182,6 +218,7 @@ class Settings:
             admin_fail_rate=_int("BTF_ADMIN_FAIL_RATE", cls.admin_fail_rate),
             client_ip_header=(os.environ.get("BTF_CLIENT_IP_HEADER") or "").strip() or None,
             hsts=_enabled("BTF_HSTS"),
+            cors_origins=_cors_origins(),
             model=(os.environ.get("BTF_MODEL") or cls.model).strip().lower(),
             env=(os.environ.get("BTF_ENV") or cls.env).strip().lower(),
             privacy_contact=(os.environ.get("BTF_PRIVACY_CONTACT") or "").strip() or None,

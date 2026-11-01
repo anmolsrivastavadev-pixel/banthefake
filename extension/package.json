@@ -1,0 +1,7 @@
+{
+  "name": "banthefake-extension",
+  "private": true,
+  "type": "module",
+  "main": "test/lib.test.js",
+  "description": "Lets `node --test extension/` find the tests (main) and load the sources as ES modules. No dependencies; not part of the packaged extension."
+}

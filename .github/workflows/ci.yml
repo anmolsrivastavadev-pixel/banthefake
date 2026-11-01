@@ -23,6 +23,14 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pytest -q
 
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Uses the runner's preinstalled Node (20+); the tests have no npm dependencies.
+      - run: node --version
+      - run: node --test extension/
+
   e2e:
     runs-on: ubuntu-latest
     steps:

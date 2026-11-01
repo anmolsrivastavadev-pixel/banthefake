@@ -97,6 +97,9 @@ AI assistants can use the same scanner locally through the stdio MCP server. See
 [`docs/MCP.md`](docs/MCP.md) for Claude Code, Codex CLI, Cursor and generic client setup, tool schemas, path
 restrictions and interpretation limits.
 
+A browser extension (Chrome/Edge, Manifest V3) adds "Check with BanTheFake" to the right-click menu on images and
+sends the image only to the server you configure. See [`docs/EXTENSION.md`](docs/EXTENSION.md).
+
 With the `ml` extra installed, both detector models load in the background at startup (`/api/health` reports
 `"model": "loading"`, then `"loaded"`, or `"degraded"` if one of the two models failed to load and the other
 runs). On first use they download about 840 MB of weights from the Hugging Face
@@ -172,6 +175,7 @@ All settings are environment variables. The defaults below come from `app/config
 | `BTF_ENV` | `development` | `production` or `development`. In `production` the app refuses to start (logs `Refusing to start: ...` and exits with status 1) while `BTF_PRIVACY_CONTACT` is unset or a placeholder (`YOUR-DOMAIN.example`, or an `example.com/.org/.net`, `.example`, `.test`, `.invalid` or `localhost` domain). Any other value is a startup error. The shipped `.env.example` and `fly.toml` set `production`. |
 | `BTF_ADMIN_FAIL_RATE` | `10` | Failed admin authentications allowed per **hour** per client IP. Once the budget is full, all admin requests from that IP return 429 until the window passes, including requests with the correct token. Successful authentication does not use the budget. |
 | `BTF_CLIENT_IP_HEADER` | unset | Opt-in name of an operator-trusted header containing exactly one IPv4 or IPv6 client address (for example, `Fly-Client-IP`). The value is used by scan, petition and failed-admin-authentication limits only when this setting is present. Invalid or missing values fall back to the socket peer. Only use a header the edge overwrites. |
+| `BTF_CORS_ORIGINS` | unset | Opt-in, comma-separated list of exact, lowercase origins (for example `chrome-extension://<id>`) allowed to read `POST /api/scan` and `GET /api/health` responses cross-origin. No wildcards, paths or credentials; invalid entries stop the app from starting. Other routes never get CORS headers. Unset means no CORS headers at all. Only needed for the browser extension when users do not grant it host access (see [`docs/EXTENSION.md`](docs/EXTENSION.md)). |
 | `BTF_HSTS` | unset | `on`, `1`, `true` or `yes` adds `Strict-Transport-Security: max-age=31536000` to every response. Enable it only when HTTPS is enforced for the hostname and the TLS proxy is not already adding HSTS. |
 | `BTF_MODEL` | `auto` | `off`, `0`, `false` or `no` disables the ML detector. Any other value enables it when the `ml` extra is installed. |
 | `BTF_MODEL_ID` | `haywoodsloan/ai-image-detector-deploy` | Primary detector (H): Hugging Face model id or local path. It must be an image-classification model with a single "AI" logit or a fake/real head. |

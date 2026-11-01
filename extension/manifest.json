@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "BanTheFake: check images",
+  "short_name": "BanTheFake",
+  "version": "0.1.0",
+  "description": "Right-click an image to check it with your BanTheFake server. Sends images only to the server you configure, only when you click.",
+  "minimum_chrome_version": "121",
+  "permissions": ["contextMenus", "activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"],
+    "type": "module"
+  },
+  "action": {
+    "default_title": "BanTheFake options",
+    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png" }
+  },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "content_security_policy": {
+    "extension_pages": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https: http://localhost:* http://127.0.0.1:* data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+  },
+  "browser_specific_settings": {
+    "gecko": { "id": "banthefake-extension@YOUR-DOMAIN.example", "strict_min_version": "128.0" }
+  }
+}

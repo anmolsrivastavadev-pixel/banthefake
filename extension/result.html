@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BanTheFake result</title>
+<link rel="stylesheet" href="ui.css" />
+</head>
+<body>
+<main>
+  <h1>BanTheFake</h1>
+  <p class="sr-only" id="status" role="status"></p>
+  <div class="verdict loading" id="verdict"><span class="dot"></span><div><b>Starting…</b></div></div>
+  <ul class="signals" id="signals"></ul>
+  <div id="sections"></div>
+  <p class="noproof" id="noproof">No tool can prove a file is real.</p>
+  <p class="privacy" id="privacy">Images are sent only to the server you configured, and only when you choose "Check with BanTheFake". This extension collects no analytics.</p>
+  <nav class="links">
+    <a id="help" href="#" target="_blank" rel="noopener noreferrer">If it happened to you: get help and get it taken down ↗</a>
+    <a id="options" href="options.html" target="_blank" rel="noopener">Extension options</a>
+  </nav>
+</main>
+<script type="module" src="result.js"></script>
+</body>
+</html>
