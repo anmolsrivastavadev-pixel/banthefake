@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BanTheFake extension options</title>
+<link rel="stylesheet" href="ui.css" />
+</head>
+<body>
+<main>
+  <h1>BanTheFake options</h1>
+  <form id="form" novalidate>
+    <label for="server">BanTheFake server</label>
+    <input type="url" id="server" name="server" autocomplete="off" spellcheck="false" aria-describedby="serverHint msg" required />
+    <p class="note" id="serverHint">The BanTheFake site that scans your images, for example <code>https://banthefake.your-domain.org</code>.
+      The default <code>https://YOUR-DOMAIN.example</code> is a placeholder: replace it with a real server before scanning.
+      Only <code>https://</code> addresses are accepted, except <code>http://localhost</code> and <code>http://127.0.0.1</code> for development.</p>
+    <button type="submit">Save</button>
+    <button type="button" id="test">Test connection</button>
+    <p class="msg" id="msg" role="status"></p>
+  </form>
+  <section class="block">
+    <h2>Privacy</h2>
+    <p>An image is read and sent only when you right-click it and choose "Check with BanTheFake", and only to the server above.
+      The extension has no analytics, loads no remote code, and keeps results in memory only until the browser closes.</p>
+    <p>When you save, your browser asks you to let the extension connect to this one server. That permission covers only the
+      server's host. If you decline, scanning works only if the server lists this extension in <code>BTF_CORS_ORIGINS</code>.</p>
+    <p class="note">Extension origin: <code id="extOrigin"></code></p>
+  </section>
+</main>
+<script type="module" src="options.js"></script>
+</body>
+</html>

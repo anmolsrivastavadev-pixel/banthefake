@@ -86,6 +86,9 @@ All JSON. Errors: `{"error": "<message>"}` with proper status code.
 - `GET /api/health` → `{"ok": true, "model": "loaded|off|unavailable", "c2pa": bool}`.
 - Security headers on all responses: CSP (self + Google Fonts), X-Content-Type-Options, Referrer-Policy,
   X-Frame-Options DENY.
+- CORS is off by default. `BTF_CORS_ORIGINS` (exact origins, comma-separated) lets those origins read
+  `POST /api/scan` and `GET /api/health` (incl. preflight); no credentials, no other routes. Used by the
+  browser extension (`extension/`, `docs/EXTENSION.md`) when it has no host permission for the server.
 
 ## Frontend changes
 - Scanner posts to `/api/scan`, shows verdict/signals/C2PA/model results, keeps client-side ELA heatmap.

@@ -11,3 +11,4 @@ Dockerfile
 .dockerignore
 README.md
 deploy/hetzner/.env
+extension
