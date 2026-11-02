@@ -188,5 +188,40 @@ pyramid 40.0%.
 
 The pre-declared calibration criterion selected R3, but R3 was the worst run on the real-swap test. The LoRA
 run overfit to self-blend artifacts that did not transfer to held-out swaps. Future rounds must therefore select
-on a swap-based validation set that is disjoint from the confirmation set. Round 4 is being prepared with a
-fresh confirmation set that has never been used for training, calibration or model selection.
+on a swap-based validation set that is disjoint from the confirmation set. The later Round 5 outcome is recorded
+below.
+
+## Round 5: validation promising, independence audit failed
+
+Round 5 trained three registered CLIP ViT-B/16 candidates. Real face images were negative examples. The fake
+examples were either self-blends made from one real face or swaps between synthetic adult faces; no real person's
+face was swapped onto another person.
+
+| Candidate | Registered training mix | `T_val` | Original `swaps_val` recall | Original `real_val` FPR | Trainable parameters |
+|---|---|---:|---:|---:|---:|
+| A `r5a_mix_sbi4_swaps` | 50% real / 25% SBI v4 self-blend / 25% synthetic swap | 0.9261 | 200/212 (94.34%) | 7/449 (1.56%) | 42,241 |
+| **B `r5b_mix_swaps_only`** | 50% real / 0% self-blend / 50% synthetic swap | **0.6155** | **204/212 (96.23%)** | **4/449 (0.89%)** | **42,241** |
+| C `r5c_sbi2_control` | 50% real / 50% SBI v2 self-blend / 0% synthetic swap | 0.9418 | 171/212 (80.66%) | 7/449 (1.56%) | 42,241 |
+
+These are validation results only. The frozen selection rule chose candidate B because it had the highest original
+`swaps_val` hit count. Its checkpoint SHA-256 was
+`13dfa8a5d14787beb0ccec5371b997d233df0f4658c69416d7ef23c72334f700`.
+
+The mandatory independent leakage audit reported **`AUDIT: FAIL`**. It found:
+
+- 6 expected synthetic training/fresh-swap images and 56 expected real training/fresh-real images produced no
+  SFace embedding;
+- the real-training-to-fresh-real maximum cosine was 0.6238467693328857, above the required strict bound of 0.6;
+- the all-training-to-all-fresh maximum cosine was also 0.6238467693328857, above the same strict bound; and
+- 19 normalised real-uploader values were shared between training and fresh data.
+
+The frozen-seal, file-independence, membership-refusal, augmentation-parity and artifact-binding checks passed,
+but they do not override the failed identity- and group-independence checks. The required audit precondition was
+therefore not met, so the confirmation test was deliberately not run. Face-swap detection stays off.
+
+The Round 5 pre-registration says a substantive leak cannot be repaired by deleting examples after validation
+results have been seen. Round 5 is closed as validation-promising but unconfirmed. Any further attempt requires a
+new pre-registered round with new validation and confirmation data, with the stricter identity and uploader checks
+applied before training or selection. The current unused confirmation set must not be used for tuning. These
+validation results do not measure modern neural face swaps, reenactment, GAN edits or diffusion edits, do not
+establish general deepfake-detection performance, and do not prove that any file is real.
