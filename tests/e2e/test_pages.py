@@ -8,7 +8,7 @@ from tests.e2e.conftest import fixture_path
 
 pytestmark = pytest.mark.e2e
 
-PAGES = ["/", "/privacy.html"]
+PAGES = ["/", "/privacy.html", "/corrections.html"]
 
 
 @pytest.mark.parametrize("path", PAGES)

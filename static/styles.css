@@ -108,6 +108,9 @@ section { padding: 96px 0; border-top: 1px solid var(--line); }
 .ela-wrap canvas { width: 100%; border-radius: 8px; border: 1px solid var(--line); background: #000; }
 .ela-wrap p { font-size: 13px; color: var(--muted); margin-top: 8px; }
 .disclaimer { margin-top: 18px; font-size: 13px; color: var(--muted); border-left: 2px solid var(--line-strong); padding-left: 12px; }
+.result-help { margin-top: 12px; font-size: 14px; }
+.result-help a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+.result-help a:hover { color: var(--red); }
 
 /* Report */
 .report { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }

@@ -328,9 +328,10 @@ def get_help_resources(country: str = "UK") -> dict[str, Any]:
     code = _country_code(country)
     resources = [dict(item) for item in HELP_RESOURCES if item["countries"] in {"GLOBAL", code}]
     note = (
-        "If someone is in immediate danger, contact local emergency services. Save evidence such as links, "
-        "usernames, dates and screenshots before requesting removal. These links are static; availability and "
-        "eligibility can change."
+        "If someone is in immediate danger, contact local emergency services. Preserve safe non-media facts such "
+        "as links, usernames and dates. If suspected sexual material involves someone under 18, do not download, "
+        "screenshot, forward, email or upload it; use the relevant child-safety service and tell a safe trusted "
+        "adult or safeguarding lead. These links are static; availability and eligibility can change."
     )
     return {"country": code, "resources": resources, "note": note}
 

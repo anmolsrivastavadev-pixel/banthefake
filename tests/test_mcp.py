@@ -168,3 +168,7 @@ def test_help_resources_include_uk_and_global_services_without_network():
     names = {resource["name"] for resource in payload["resources"]}
     assert {"Report Remove", "Childline", "CEOP Safety Centre", "StopNCII.org", "Take It Down (NCMEC)"} <= names
     assert all(resource["url"].startswith("https://") for resource in payload["resources"])
+    note = payload["note"]
+    for text in ("safe non-media facts", "under 18", "do not download", "screenshot", "forward", "email", "upload"):
+        assert text in note
+    assert "safe trusted adult or safeguarding lead" in note

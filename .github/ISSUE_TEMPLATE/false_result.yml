@@ -7,10 +7,13 @@ body:
   - type: markdown
     attributes:
       value: |
+        **This creates a public GitHub issue. Your GitHub username, report text and comments will be public and
+        retained by GitHub under its policies. Use this form only for non-sensitive, non-identifying text.**
+
         Detector results are evidence, not proof that a file or scene is real or fake. Negative and inconclusive
         results are useful to the project.
 
-        **Do not upload intimate or private images of real people. Do not link to them.** Describe the file and
+        **Do not upload intimate or private images of real people, or any image of someone under 18. Do not link to them.** Describe the file and
         result instead. If a safe, redistributable example is necessary, maintainers can discuss a synthetic or
         non-sensitive substitute with you.
   - type: dropdown
@@ -74,6 +77,8 @@ body:
       label: Safety confirmation
       options:
         - label: I have not attached or linked intimate or private media of a real person.
+          required: true
+        - label: I have not attached or linked an image or video of anyone under 18.
           required: true
         - label: I understand that BanTheFake cannot prove that a file or depicted scene is real.
           required: true
