@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Report a scanner mistake · BanTheFake</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<nav aria-label="Main">
+  <div class="wrap">
+    <a href="/" class="logo"><span class="logo-mark" aria-hidden="true"></span>BanTheFake</a>
+    <a href="/#scan" class="btn btn-red">Scan media</a>
+  </div>
+</nav>
+
+<main id="main" tabindex="-1">
+  <article class="prose">
+    <div class="wrap">
+      <div class="eyebrow">Corrections</div>
+      <h1>Report a scanner mistake</h1>
+      <p class="lede">BanTheFake reports signals and model estimates. They can be wrong in both directions. A result is not an accusation, and no tool can prove that a file or depicted scene is real.</p>
+
+      <div class="contact-box">
+        <h2>Choose the right route</h2>
+        <ul>
+          <li><strong>Ordinary wrong or surprising result:</strong> use the <a href="https://github.com/anmolsrivastavadev-pixel/banthefake/issues/new?template=false_result.yml" target="_blank" rel="noopener">false-result issue form<span class="sr-only"> (opens in a new tab)</span></a> only for non-sensitive, non-identifying text. The issue, your GitHub username and all comments will be public and retained by GitHub under its policies.</li>
+          <li><strong>Trust, privacy or security flaw:</strong> do not open a public issue. Read <a href="https://github.com/anmolsrivastavedev-pixel/banthefake/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md<span class="sr-only"> (opens in a new tab)</span></a> and use <a href="https://github.com/anmolsrivastavadev-pixel/banthefake/security/advisories/new" target="_blank" rel="noopener">private vulnerability reporting<span class="sr-only"> (opens in a new tab)</span></a>.</li>
+          <li><strong>Someone is being targeted:</strong> use the <a href="/#report">victim support and reporting routes</a>.</li>
+          <li><strong>Sensitive correction to a statement controlled by BanTheFake:</strong> do not use a public issue. Send text only through the configured contact on our <a href="/privacy.html">privacy notice</a>. Do not send the media.</li>
+          <li><strong>Privacy question or deletion request:</strong> use the same configured private contact.</li>
+        </ul>
+        <p><strong>Do not attach or link intimate or private media, images of a child, identity documents, passwords or other sensitive files.</strong> Report the result text and a non-identifying description. BanTheFake does not need the private media to accept or correct a report.</p>
+      </div>
+
+      <h2>Report template</h2>
+      <p>Please include what you can. Leave out anything unsafe or identifying that is not needed.</p>
+      <ul>
+        <li><strong>Where the result appeared:</strong> the BanTheFake page, extension, bot, or a campaign post.</li>
+        <li><strong>Exact wording:</strong> copy the verdict and textual signals with names, file paths and other identifiers removed. Do not attach a screenshot.</li>
+        <li><strong>When it happened:</strong> date, approximate time and time zone.</li>
+        <li><strong>What you expected and why:</strong> for example, known origin information or an editing history that can be shared safely.</li>
+        <li><strong>Public location:</strong> a link to the BanTheFake statement, if the campaign repeated the result publicly. Do not send a private-media link.</li>
+        <li><strong>Private-report permission:</strong> if you used the private contact, say whether we may quote any part of your report in a public correction. The default is no.</li>
+      </ul>
+
+      <h2>What happens next</h2>
+      <ol>
+        <li><strong>Protect people first.</strong> We stop repeating a disputed claim and remove or clearly mark our own public post while it is checked.</li>
+        <li><strong>Confirm the source.</strong> We check that the wording came from BanTheFake and record the software version, result text and relevant public context. The scanner does not retain uploaded media.</li>
+        <li><strong>Reproduce safely.</strong> We test decision logic with existing licence-compatible fixtures or a synthetic, non-sensitive substitute. We do not request private or intimate media, and we do not ask someone to prove a scene is real.</li>
+        <li><strong>Classify the problem.</strong> It may be a model false positive, misleading wording, a campaign mistake, not a BanTheFake result (supported by evidence), or unresolved. “Unresolved” is not evidence against the person shown.</li>
+        <li><strong>Correct the record.</strong> If BanTheFake got something wrong, we update the original place where possible and publish what changed, why, and the limits of the corrected conclusion.</li>
+        <li><strong>Prevent a repeat.</strong> We add a test or documentation fix when we can do so with consent and properly licensed, non-sensitive material.</li>
+      </ol>
+      <p>Without safely shareable source material and independent ground truth, the exact reported file remains unresolved. A safe substitute may reveal a general bug, but it cannot prove what happened to that file. BanTheFake can still correct campaign misuse or misleading wording without deciding whether the file is real.</p>
+
+      <h2>When we escalate</h2>
+      <p>A safe trusted adult or safeguarding lead takes over when a report involves a child, intimate imagery, threats, harassment, doxxing, an active allegation about a named person, press or election attention, a legal request, or a possible privacy or security incident. This may be a parent only when that is safe for the affected person. Immediate danger belongs with local emergency services. We preserve only the minimum information needed and use specialist reporting or support services where appropriate.</p>
+
+      <h2>How we word a correction</h2>
+      <p>We do not call a person a liar, faker or offender based on a scan. A correction should identify our error and its reach:</p>
+      <div class="contact-box">
+        <p><strong>Correction:</strong> BanTheFake previously described this media using an automated scan result. That result was not proof and should not have been presented as a fact. We have removed or corrected our statement. Our review found <span class="mono">[false positive / misleading wording / unresolved result]</span>. We are sorry. <span class="mono">[What changed and what remains uncertain.]</span></p>
+      </div>
+
+      <p class="muted back"><a href="/">← Back to BanTheFake</a></p>
+    </div>
+  </article>
+</main>
+
+<footer>
+  <div class="wrap">
+    <a href="/" class="logo"><span class="logo-mark" aria-hidden="true"></span>BanTheFake</a>
+    <span>If you are in immediate danger, contact local emergency services.</span>
+    <a href="/privacy.html">Privacy notice</a>
+  </div>
+</footer>
+
+</body>
+</html>
