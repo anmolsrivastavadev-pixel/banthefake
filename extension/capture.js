@@ -59,17 +59,28 @@
   }
 
   /**
-   * Pick the video the user means. `cands`: [{ src, area, visible, playing, ready }] (area = on-screen pixels).
-   * The right-clicked video (src match) wins; else the largest visible playing one; else the largest visible one.
+   * Pick the video the user means. `cands`: [{ src, area, visible, transparent, playing, ready }]
+   * (area = on-screen pixels).
+   * The right-clicked video (src match) wins; else prefer ordinary visible players. A caller may allow one
+   * playing, ready transparent fallback for a site known to composite its visible player through an overlay.
    * Returns an index or -1.
    */
-  function chooseVideo(cands, srcUrl = '') {
+  function chooseVideo(cands, srcUrl = '', allowTransparentFallback = false) {
     const usable = cands.map((c, i) => ({ ...c, i })).filter(c => c.visible && c.area > 0);
     if (srcUrl) {
       const hit = usable.find(c => c.src && c.src === srcUrl);
       if (hit) return hit.i;
     }
-    const pool = usable.some(c => c.playing) ? usable.filter(c => c.playing) : usable;
+    // A page-menu click does not identify a specific video. Prefer ordinary visible players so a transparent
+    // autoplay ad or preload cannot outrank what the user can see. TikTok is a narrow exception: its visible
+    // player is composited through an overlay and the underlying, canvas-readable <video> reports opacity: 0.
+    const ordinary = usable.filter(c => !c.transparent);
+    let pool = ordinary.some(c => c.playing) ? ordinary.filter(c => c.playing) : ordinary;
+    if (!pool.length && allowTransparentFallback) {
+      const fallback = usable.filter(c => c.transparent && c.playing && c.ready);
+      if (fallback.length !== 1) return -1;
+      pool = fallback;
+    }
     let best = -1;
     let bestArea = 0;
     for (const c of pool) {
@@ -145,11 +156,12 @@
       const w = Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0));
       const h = Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, 0));
       const style = win.getComputedStyle ? win.getComputedStyle(v) : null;
-      const hidden = style && (style.visibility === 'hidden' || style.display === 'none' || Number(style.opacity) === 0);
+      const hidden = style && (style.visibility === 'hidden' || style.display === 'none');
       return {
         src: v.currentSrc || v.src || '',
         area: w * h,
         visible: !hidden && w * h > 0,
+        transparent: Boolean(style && Number(style.opacity) === 0),
         playing: !v.paused && !v.ended && v.readyState > HAVE_CURRENT_DATA,
         ready: v.readyState >= HAVE_CURRENT_DATA,
       };
@@ -180,7 +192,8 @@
     const host = String(win.location?.hostname || '');
 
     const { videos, cands } = describeCandidates(doc, win);
-    const index = chooseVideo(cands, o.srcUrl || '');
+    const tikTokPage = /(^|\.)tiktok\.com$/i.test(host);
+    const index = chooseVideo(cands, o.srcUrl || '', tikTokPage);
     if (index < 0) return { ok: false, error: 'no_video', host };
     const video = videos[index];
     if (video.readyState < HAVE_CURRENT_DATA || !video.videoWidth || !video.videoHeight) {
