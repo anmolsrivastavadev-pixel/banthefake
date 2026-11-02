@@ -121,7 +121,7 @@ test('the sampler grabs at once, then once per interval, and stops when playback
 
 function fakePage({
   paused = false, duration = 120, mediaKeys = null, taint = false, blank = false, blobSize = 300_000,
-  readyState = 4, videos = 1, width = 1920, height = 1080, host = 'www.youtube.com',
+  readyState = 4, videos = 1, width = 1920, height = 1080, host = 'www.youtube.com', css = {},
 } = {}) {
   const log = { draws: [], sleeps: [], playbackCalls: [] };
   let t = 10;
@@ -149,7 +149,12 @@ function fakePage({
     return c;
   };
   const document = { querySelectorAll: sel => (sel === 'video' ? list : []), createElement: () => canvas() };
-  const window = { innerWidth: 1280, innerHeight: 800, location: { hostname: host }, getComputedStyle: () => ({ visibility: 'visible', display: 'block', opacity: '1' }) };
+  const window = {
+    innerWidth: 1280, innerHeight: 800, location: { hostname: host },
+    getComputedStyle: () => ({
+      visibility: css.visibility ?? 'visible', display: css.display ?? 'block', opacity: css.opacity ?? '1',
+    }),
+  };
   let clock = 0;
   const env = {
     document, window,
@@ -216,6 +221,36 @@ test('capture: the largest on-screen video is chosen', async () => {
   const r = await C.capture({}, env);
   assert.equal(r.ok, true);
   assert.deepEqual(log.draws[0], [1280, 720]);
+});
+
+test('capture: a sole opacity-zero TikTok player is eligible when playing, ready and canvas-readable', async () => {
+  const { env, log } = fakePage({ host: 'www.tiktok.com', css: { opacity: '0' } });
+  const result = await C.capture({}, env);
+  assert.equal(result.ok, true);
+  assert.equal(result.frames.length, 8);
+  assert.equal(result.host, 'www.tiktok.com');
+  assert.ok(log.draws.length > 0);
+});
+
+test('transparent page-menu fallbacks are TikTok-only, singular, and never outrank a visible player', async () => {
+  const visible = { area: 100, playing: false, ready: true, src: '', visible: true, transparent: false };
+  const transparent = { area: 1000, playing: true, ready: true, src: '', visible: true, transparent: true };
+  assert.equal(C.chooseVideo([visible, transparent], '', true), 0);
+  assert.equal(C.chooseVideo([transparent], '', false), -1);
+  assert.equal(C.chooseVideo([transparent], '', true), 0);
+  assert.equal(C.chooseVideo([transparent, { ...transparent, area: 900 }], '', true), -1);
+
+  const unrelated = await C.capture({}, fakePage({ host: 'example.org', css: { opacity: '0' } }).env);
+  assert.equal(unrelated.error, 'no_video');
+  const lookalike = await C.capture({}, fakePage({ host: 'tiktok.com.evil.org', css: { opacity: '0' } }).env);
+  assert.equal(lookalike.error, 'no_video');
+});
+
+test('capture: display-none and visibility-hidden videos remain ineligible', async () => {
+  const displayNone = await C.capture({}, fakePage({ css: { display: 'none', opacity: '1' } }).env);
+  const visibilityHidden = await C.capture({}, fakePage({ css: { visibility: 'hidden', opacity: '1' } }).env);
+  assert.equal(displayNone.error, 'no_video');
+  assert.equal(visibilityHidden.error, 'no_video');
 });
 
 // ---------- Payload and wording ----------
