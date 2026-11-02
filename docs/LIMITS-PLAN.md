@@ -109,5 +109,22 @@ YuNet with the externally trained GenD CLIP-L/14 checkpoint and failed the FPR-i
 overall-recall, morph-recall and memory gates, while its FaceForensics++ training data also left commercial
 checkpoint rights unresolved. The second benchmark trained a licence-clean CLIP ViT-B/16 detector on
 self-blended Commons faces; selected R3 passed FPR, latency and memory gates but achieved only 35.9% overall
-recall and failed the recall gate for every swap method. Full methods, results and the Round 4 plan are in
+recall and failed the recall gate for every swap method. Full methods, earlier results and the Round 5 record are in
 `docs/FACESWAP-EVAL.md`.
+
+Round 5 status: **validation promising; independent leakage audit FAILED; confirmation deliberately not run;
+face-swap detection stays OFF.** The registered candidates trained on real-face negatives plus synthetic-face
+swaps and/or single-face self-blends; real people were never swapped. At their registered validation thresholds,
+A recalled 200/212 swaps (94.34%) at `T_val=0.9261` with real FPR 7/449 (1.56%); B recalled 204/212 (96.23%) at
+`T_val=0.6155` with real FPR 4/449 (0.89%); and C recalled 171/212 (80.66%) at `T_val=0.9418` with real FPR
+7/449 (1.56%). Candidate B was the frozen validation choice. These are validation results, not confirmation or
+evidence of performance on deepfakes generally.
+
+The independent audit failed because 6 expected synthetic training/fresh-swap images and 56 expected real
+training/fresh-real images produced no SFace embedding; the real-training-to-fresh-real and
+all-training-to-all-fresh maximum cosines were both 0.6238467693328857, while every cosine had to be strictly
+below 0.6; and 19 normalised real-uploader values were shared between training and fresh data. Under
+`research/faceswap/train/PREREG-R5.md`, this cannot be repaired by deleting examples after seeing validation
+results. Further work requires a new pre-registered round with new validation and confirmation data and the
+stricter audit applied before training or selection. The current unused confirmation set must not be used for
+tuning, and no face-swap result can prove that a file is real.
