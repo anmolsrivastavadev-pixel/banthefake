@@ -4,6 +4,14 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>BanTheFake: Stop harmful deepfakes</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<meta name="theme-color" content="#0d0f14" />
+<meta name="description" content="Check suspicious images and videos for AI and editing signs, get deepfakes taken down, and sign the petition to stop harmful deepfakes." />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="BanTheFake" />
+<meta property="og:title" content="BanTheFake: Your face. Your voice. Your consent." />
+<meta property="og:description" content="Check suspicious images and videos for AI and editing signs, get deepfakes taken down, and sign the petition to stop harmful deepfakes." />
+<meta name="twitter:card" content="summary" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -17,7 +25,8 @@
 <nav aria-label="Main">
   <div class="wrap">
     <a href="/" class="logo"><span class="logo-mark" aria-hidden="true"></span>BanTheFake</a>
-    <ul class="nav-links">
+    <button class="menu-btn" type="button" id="menuBtn" aria-expanded="false" aria-controls="navLinks">Menu</button>
+    <ul class="nav-links" id="navLinks">
       <li><a href="#scan">Scan media</a></li>
       <li><a href="#report">Report</a></li>
       <li><a href="#demands">Our demands</a></li>
@@ -160,6 +169,15 @@
           <button class="btn btn-red" type="submit">Sign now</button>
           <div class="thanks" id="thanks" role="status"></div>
         </form>
+        <div class="share" id="share">
+          <p class="share-title">Every share brings more signatures.</p>
+          <div class="share-btns">
+            <button class="btn btn-ghost" type="button" id="shareBtn" hidden>Share</button>
+            <a class="btn btn-ghost" id="shareWa" href="https://wa.me/?text=Sign%20the%20petition%20to%20stop%20harmful%20deepfakes" target="_blank" rel="noopener">WhatsApp<span class="sr-only"> (opens in a new tab)</span></a>
+            <button class="btn btn-ghost" type="button" id="copyLink">Copy link</button>
+          </div>
+          <p class="sr-only" id="shareStatus" role="status"></p>
+        </div>
       </div>
       <div class="panel">
         <h3>Letter generator</h3>
