@@ -236,3 +236,24 @@ main:focus { outline: none; }
   textarea { font-size: 13px; }
 }
 .config-warning { margin: 0 0 16px; padding: 12px 16px; border: 1px solid rgba(255,77,77,.5); background: var(--red-soft); border-radius: 8px; }
+
+/* ---------- Mobile menu + sharing ---------- */
+.menu-btn { display: none; margin-left: auto; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--line-strong); background: transparent; color: var(--text); font: 500 14px var(--font-body); cursor: pointer; }
+@media (max-width: 860px) {
+  .menu-btn { display: inline-flex; }
+  .nav-links.open { display: grid; position: absolute; top: 64px; left: 0; right: 0; padding: 8px 16px 16px; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .nav-links.open a { display: block; padding: 12px; font-size: 16px; }
+}
+.share { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.share-title { font-size: 14px; color: var(--muted); }
+.share-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.share-btns .btn { padding: 9px 14px; font-size: 14px; }
+nav .btn { white-space: nowrap; }
+@media (max-width: 420px) {
+  nav .wrap { gap: 8px; }
+  .logo { gap: 8px; font-size: 17px; }
+  .logo-mark, .logo-mark::after { width: 26px; }
+  .logo-mark { height: 26px; }
+  .menu-btn { padding: 7px 10px; }
+  nav .btn { padding: 8px 10px; font-size: 13px; }
+}

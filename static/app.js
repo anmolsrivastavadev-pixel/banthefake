@@ -394,3 +394,45 @@ document.getElementById('copy').addEventListener('click', async e => {
   setTimeout(() => { button.textContent = 'Copy letter'; copyStatus.textContent = ''; }, 3000);
 });
 renderLetter();
+
+// ---------- Mobile menu ----------
+const menuBtn = document.getElementById('menuBtn');
+const navLinks = document.getElementById('navLinks');
+if (menuBtn && navLinks) {
+  const setMenu = open => {
+    menuBtn.setAttribute('aria-expanded', String(open));
+    navLinks.classList.toggle('open', open);
+  };
+  menuBtn.addEventListener('click', () => setMenu(menuBtn.getAttribute('aria-expanded') !== 'true'));
+  navLinks.addEventListener('click', e => { if (e.target.closest('a')) setMenu(false); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && navLinks.classList.contains('open')) { setMenu(false); menuBtn.focus(); }
+  });
+}
+
+// ---------- Share the petition ----------
+const shareUrl = location.origin + '/#act';
+const shareText = 'Sign the petition to stop harmful deepfakes';
+const shareStatus = document.getElementById('shareStatus');
+const shareBtn = document.getElementById('shareBtn');
+const shareWa = document.getElementById('shareWa');
+const copyLink = document.getElementById('copyLink');
+if (shareWa) shareWa.href = 'https://wa.me/?text=' + encodeURIComponent(shareText + ': ' + shareUrl);
+if (shareBtn && navigator.share) {
+  shareBtn.hidden = false;
+  shareBtn.addEventListener('click', () => {
+    navigator.share({ title: 'BanTheFake', text: shareText, url: shareUrl }).catch(() => {});
+  });
+}
+if (copyLink) {
+  copyLink.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      shareStatus.textContent = 'Link copied.';
+      copyLink.textContent = 'Copied ✓';
+    } catch {
+      shareStatus.textContent = 'Could not copy. The link is ' + shareUrl;
+    }
+    setTimeout(() => { copyLink.textContent = 'Copy link'; }, 2000);
+  });
+}

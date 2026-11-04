@@ -125,3 +125,40 @@ def test_reduced_motion_is_respected(page: Page, watch):
               .flatMap(e => getComputedStyle(e).transitionDuration.split(',').map(parseFloat))"""
     )
     assert durations and max(durations) <= 0.001, durations
+
+
+def test_mobile_menu_opens_closes_and_navigates(page: Page, watch):
+    page.set_viewport_size({"width": 390, "height": 800})
+    page.goto("/")
+    btn = page.locator("#menuBtn")
+    links = page.locator("#navLinks")
+    expect(btn).to_be_visible()
+    expect(links).to_be_hidden()
+    btn.click()
+    expect(btn).to_have_attribute("aria-expanded", "true")
+    expect(links).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(links).to_be_hidden()
+    expect(btn).to_be_focused()
+    btn.click()
+    links.get_by_role("link", name="FAQ").click()
+    expect(links).to_be_hidden()
+    assert page.evaluate("location.hash") == "#faq"
+
+
+def test_menu_button_hidden_on_desktop(page: Page, watch):
+    page.set_viewport_size({"width": 1280, "height": 800})
+    page.goto("/")
+    expect(page.locator("#menuBtn")).to_be_hidden()
+    expect(page.locator("#navLinks")).to_be_visible()
+
+
+def test_copy_link_copies_petition_url(page: Page, watch):
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    page.goto("/")
+    page.locator("#copyLink").click()
+    expect(page.locator("#shareStatus")).to_have_text("Link copied.")
+    origin = page.evaluate("location.origin")
+    assert page.evaluate("navigator.clipboard.readText()") == origin + "/#act"
+    href = page.locator("#shareWa").get_attribute("href")
+    assert href.startswith("https://wa.me/?text=") and "%2F%23act" in href
