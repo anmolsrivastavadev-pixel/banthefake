@@ -162,3 +162,14 @@ def test_copy_link_copies_petition_url(page: Page, watch):
     assert page.evaluate("navigator.clipboard.readText()") == origin + "/#act"
     href = page.locator("#shareWa").get_attribute("href")
     assert href.startswith("https://wa.me/?text=") and "%2F%23act" in href
+
+
+def test_nav_cta_keeps_full_name_on_small_phones(page: Page, watch):
+    page.set_viewport_size({"width": 320, "height": 700})
+    page.goto("/")
+    cta = page.locator("nav .nav-cta")
+    expect(cta).to_have_accessible_name("Sign the petition")
+    nav = page.locator("nav .wrap").bounding_box()
+    assert nav is not None and page.evaluate("document.scrollingElement.scrollWidth") <= 320
+    box = cta.bounding_box()
+    assert box is not None and box["x"] + box["width"] <= 320 and box["height"] < 48
